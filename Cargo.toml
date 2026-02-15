@@ -1,0 +1,59 @@
+[package]
+name = "service-bus-explorer-tui"
+version = "0.1.0"
+edition = "2021"
+description = "A cross-platform TUI for managing Azure Service Bus"
+license = "MIT"
+readme = "README.md"
+keywords = ["azure", "service-bus", "tui", "terminal"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+# TUI
+ratatui = "0.30"
+crossterm = "0.28"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+quick-xml = { version = "0.37", features = ["serialize"] }
+
+# Auth / Crypto
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+urlencoding = "2"
+
+# Azure AD authentication
+azure_identity = "0.23"
+azure_core = "0.23"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Clipboard
+arboard = "3"
+
+# UUID for message IDs
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
