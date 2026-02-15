@@ -8,7 +8,13 @@ readme = "README.md"
 keywords = ["azure", "service-bus", "tui", "terminal"]
 categories = ["command-line-utilities"]
 
+[features]
+vendored-tls = ["dep:openssl-sys"]
+
 [dependencies]
+# Vendored OpenSSL for cross-compilation (behind feature flag)
+openssl-sys = { version = "0.9", features = ["vendored"], optional = true }
+
 # TUI
 ratatui = "0.30"
 crossterm = "0.28"
