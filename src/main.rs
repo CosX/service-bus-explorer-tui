@@ -21,7 +21,10 @@ use client::models::EntityType;
 /// Queues remain unchanged.
 fn send_path(entity_path: &str) -> &str {
     // Subscription paths contain "/Subscriptions/" (case-insensitive match)
-    if let Some(idx) = entity_path.find("/Subscriptions/").or_else(|| entity_path.find("/subscriptions/")) {
+    if let Some(idx) = entity_path
+        .find("/Subscriptions/")
+        .or_else(|| entity_path.find("/subscriptions/"))
+    {
         &entity_path[..idx]
     } else {
         entity_path
@@ -82,10 +85,7 @@ async fn resolve_resend_pairs(
         Ok(subs
             .iter()
             .map(|s| {
-                let dlq = format!(
-                    "{}/subscriptions/{}/$deadletterqueue",
-                    entity_path, s.name
-                );
+                let dlq = format!("{}/subscriptions/{}/$deadletterqueue", entity_path, s.name);
                 (dlq, send_target.to_string())
             })
             .collect())
@@ -125,12 +125,7 @@ async fn resend_dlq_loop(
             let locked = match dp.peek_lock(dlq_path, 1).await {
                 Ok(Some(msg)) => msg,
                 Ok(None) => break,
-                Err(e) => {
-                    return Err(format!(
-                        "Resend failed after {} messages: {}",
-                        resent, e
-                    ))
-                }
+                Err(e) => return Err(format!("Resend failed after {} messages: {}", resent, e)),
             };
 
             let lock_uri = match locked.lock_token_uri {
@@ -157,7 +152,7 @@ async fn resend_dlq_loop(
             }
 
             path_count += 1;
-            if (resent + errors) % 50 == 0 {
+            if (resent + errors).is_multiple_of(50) {
                 let _ = tx.send(BgEvent::Progress(format!(
                     "Resent {} messages ({} errors)... (Esc to cancel)",
                     resent, errors
@@ -231,10 +226,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 }
                 BgEvent::ResendComplete { resent, errors } => {
                     if errors > 0 {
-                        app.set_status(format!(
-                            "Resent {} messages ({} errors)",
-                            resent, errors
-                        ));
+                        app.set_status(format!("Resent {} messages ({} errors)", resent, errors));
                     } else {
                         app.set_status(format!("Resent {} messages", resent));
                     }
@@ -264,7 +256,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.bg_running = false;
                     app.loading = false;
                 }
-                BgEvent::TreeRefreshed { mut tree, flat_nodes } => {
+                BgEvent::TreeRefreshed {
+                    mut tree,
+                    flat_nodes,
+                } => {
                     let q_count = flat_nodes
                         .iter()
                         .filter(|n| n.entity_type == EntityType::Queue)
@@ -275,9 +270,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                         .count();
 
                     // Preserve expand/collapse state and selection across refreshes
-                    let prev_selected_id = app.flat_nodes
-                        .get(app.tree_selected)
-                        .map(|n| n.id.clone());
+                    let prev_selected_id =
+                        app.flat_nodes.get(app.tree_selected).map(|n| n.id.clone());
 
                     if let Some(ref old_tree) = app.tree {
                         let mut expanded_ids = std::collections::HashSet::new();
@@ -303,7 +297,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.set_status(format!("Loaded {} queues, {} topics", q_count, t_count));
                 }
                 BgEvent::DetailLoaded(detail) => {
-                    app.detail_view = detail;
+                    app.detail_view = *detail;
                 }
                 BgEvent::PeekComplete { messages, is_dlq } => {
                     let count = messages.len();
@@ -337,11 +331,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.modal = ActiveModal::None;
                     needs_refresh = true;
                 }
-                BgEvent::ResendSendComplete { status, dlq_seq_removed, was_inline } => {
+                BgEvent::ResendSendComplete {
+                    status,
+                    dlq_seq_removed,
+                    was_inline,
+                } => {
                     if let Some(seq) = dlq_seq_removed {
-                        app.dlq_messages.retain(|m| {
-                            m.broker_properties.sequence_number != Some(seq)
-                        });
+                        app.dlq_messages
+                            .retain(|m| m.broker_properties.sequence_number != Some(seq));
                     }
                     app.set_status(status);
                     if was_inline {
@@ -369,7 +366,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 app.set_status("Loading entities...");
 
                 let mgmt = mgmt;
-                let namespace = app.connection_config
+                let namespace = app
+                    .connection_config
                     .as_ref()
                     .map(|c| c.namespace.clone())
                     .unwrap_or_else(|| "Namespace".to_string());
@@ -446,7 +444,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             _ => None,
                         };
                         if let Some(d) = detail {
-                            let _ = tx.send(BgEvent::DetailLoaded(d));
+                            let _ = tx.send(BgEvent::DetailLoaded(Box::new(d)));
                         }
                     });
                 }
@@ -461,7 +459,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 let is_topic = *entity_type == EntityType::Topic;
                 let entity_path = path.to_string();
                 app.peek_dlq = false;
-                let peek_count = app.pending_peek_count.take()
+                let peek_count = app
+                    .pending_peek_count
+                    .take()
                     .unwrap_or(app.config.settings.peek_count);
                 let tx = app.bg_tx.clone();
 
@@ -475,19 +475,30 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             match mgmt.list_subscriptions(&entity_path).await {
                                 Ok(subs) => {
                                     for s in &subs {
-                                        let dlq_path = format!("{}/subscriptions/{}/$deadletterqueue", entity_path, s.name);
-                                        if let Ok(msgs) = dp.peek_messages(&dlq_path, peek_count).await {
+                                        let dlq_path = format!(
+                                            "{}/subscriptions/{}/$deadletterqueue",
+                                            entity_path, s.name
+                                        );
+                                        if let Ok(msgs) =
+                                            dp.peek_messages(&dlq_path, peek_count).await
+                                        {
                                             all_msgs.extend(msgs);
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(BgEvent::Failed(format!("Failed to list subscriptions: {}", e)));
+                                    let _ = tx.send(BgEvent::Failed(format!(
+                                        "Failed to list subscriptions: {}",
+                                        e
+                                    )));
                                     return;
                                 }
                             }
                         }
-                        let _ = tx.send(BgEvent::PeekComplete { messages: all_msgs, is_dlq: true });
+                        let _ = tx.send(BgEvent::PeekComplete {
+                            messages: all_msgs,
+                            is_dlq: true,
+                        });
                     });
                 } else {
                     let peek_path = if is_dlq {
@@ -499,7 +510,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     tokio::spawn(async move {
                         match dp.peek_messages(&peek_path, peek_count).await {
                             Ok(msgs) => {
-                                let _ = tx.send(BgEvent::PeekComplete { messages: msgs, is_dlq });
+                                let _ = tx.send(BgEvent::PeekComplete {
+                                    messages: msgs,
+                                    is_dlq,
+                                });
                             }
                             Err(e) => {
                                 let _ = tx.send(BgEvent::Failed(format!("Peek failed: {}", e)));
@@ -513,10 +527,16 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
         }
 
         // Clear (delete / delete DLQ) — spawn background purge
-        let is_clear_delete = app.status_message == "Clearing (delete)..." || app.status_message == "Clearing (delete DLQ)...";
+        let is_clear_delete = app.status_message == "Clearing (delete)..."
+            || app.status_message == "Clearing (delete DLQ)...";
         if is_clear_delete && app.data_plane.is_some() && !app.bg_running {
             let is_dlq = app.status_message == "Clearing (delete DLQ)...";
-            if let ActiveModal::ClearOptions { ref entity_path, is_topic, .. } = app.modal {
+            if let ActiveModal::ClearOptions {
+                ref entity_path,
+                is_topic,
+                ..
+            } = app.modal
+            {
                 let entity_path = entity_path.clone();
                 let dp = app.data_plane.clone().unwrap();
                 let tx = app.bg_tx.clone();
@@ -528,42 +548,63 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 app.set_status("Preparing purge...");
 
                 tokio::spawn(async move {
-                    let paths = match resolve_purge_paths(mgmt.as_ref(), &entity_path, is_topic, is_dlq).await {
-                        Ok(p) => p,
-                        Err(e) => { let _ = tx.send(BgEvent::Failed(e)); return; }
-                    };
+                    let paths =
+                        match resolve_purge_paths(mgmt.as_ref(), &entity_path, is_topic, is_dlq)
+                            .await
+                        {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = tx.send(BgEvent::Failed(e));
+                                return;
+                            }
+                        };
 
-                    let _ = tx.send(BgEvent::Progress(
-                        format!("Purging messages from {} path(s) (Esc to cancel)...", paths.len()),
-                    ));
+                    let _ = tx.send(BgEvent::Progress(format!(
+                        "Purging messages from {} path(s) (Esc to cancel)...",
+                        paths.len()
+                    )));
 
-                    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
+                    let (progress_tx, mut progress_rx) =
+                        tokio::sync::mpsc::unbounded_channel::<u64>();
                     let tx2 = tx.clone();
                     let progress_task = tokio::spawn(async move {
                         let mut last_reported = 0u64;
                         while let Some(n) = progress_rx.recv().await {
                             if n >= last_reported + 50 {
                                 last_reported = n;
-                                let _ = tx2.send(BgEvent::Progress(
-                                    format!("Deleted {} messages... (Esc to cancel)", n),
-                                ));
+                                let _ = tx2.send(BgEvent::Progress(format!(
+                                    "Deleted {} messages... (Esc to cancel)",
+                                    n
+                                )));
                             }
                         }
                     });
 
                     let mut count = 0u64;
                     for path in &paths {
-                        match dp.purge_concurrent(path, 32, Some(cancel.clone()), Some(progress_tx.clone())).await {
+                        match dp
+                            .purge_concurrent(
+                                path,
+                                32,
+                                Some(cancel.clone()),
+                                Some(progress_tx.clone()),
+                            )
+                            .await
+                        {
                             Ok(n) => count += n,
                             Err(e) => {
                                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                                     let _ = tx.send(BgEvent::Cancelled {
-                                        message: format!("Cancelled after deleting {} messages", count),
+                                        message: format!(
+                                            "Cancelled after deleting {} messages",
+                                            count
+                                        ),
                                     });
                                 } else {
-                                    let _ = tx.send(BgEvent::Failed(
-                                        format!("Purge failed after {} messages: {}", count, e),
-                                    ));
+                                    let _ = tx.send(BgEvent::Failed(format!(
+                                        "Purge failed after {} messages: {}",
+                                        count, e
+                                    )));
                                 }
                                 drop(progress_tx);
                                 let _ = progress_task.await;
@@ -587,8 +628,16 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
         }
 
         // Clear (resend) — spawn background resend of all DLQ messages
-        if app.status_message == "Clearing (resend)..." && app.data_plane.is_some() && !app.bg_running {
-            if let ActiveModal::ClearOptions { ref base_entity_path, is_topic, .. } = app.modal {
+        if app.status_message == "Clearing (resend)..."
+            && app.data_plane.is_some()
+            && !app.bg_running
+        {
+            if let ActiveModal::ClearOptions {
+                ref base_entity_path,
+                is_topic,
+                ..
+            } = app.modal
+            {
                 let entity_path = base_entity_path.clone();
                 let dp = app.data_plane.clone().unwrap();
                 let tx = app.bg_tx.clone();
@@ -601,14 +650,25 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 app.set_status("Preparing DLQ resend...");
 
                 tokio::spawn(async move {
-                    let pairs = match resolve_resend_pairs(mgmt.as_ref(), &entity_path, &send_target, is_topic).await {
+                    let pairs = match resolve_resend_pairs(
+                        mgmt.as_ref(),
+                        &entity_path,
+                        &send_target,
+                        is_topic,
+                    )
+                    .await
+                    {
                         Ok(p) => p,
-                        Err(e) => { let _ = tx.send(BgEvent::Failed(e)); return; }
+                        Err(e) => {
+                            let _ = tx.send(BgEvent::Failed(e));
+                            return;
+                        }
                     };
 
-                    let _ = tx.send(BgEvent::Progress(
-                        format!("Resending all DLQ messages from {} path(s) (Esc to cancel)...", pairs.len()),
-                    ));
+                    let _ = tx.send(BgEvent::Progress(format!(
+                        "Resending all DLQ messages from {} path(s) (Esc to cancel)...",
+                        pairs.len()
+                    )));
 
                     match resend_dlq_loop(&dp, &pairs, None, &cancel, &tx).await {
                         Ok((resent, errors)) => {
@@ -647,7 +707,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                 Err(client::ServiceBusError::Operation("Invalid path".into()))
                             }
                         } else {
-                            mgmt.delete_queue(&path).await.or(mgmt.delete_topic(&path).await)
+                            mgmt.delete_queue(&path)
+                                .await
+                                .or(mgmt.delete_topic(&path).await)
                         };
 
                         match result {
@@ -715,9 +777,16 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             Ok(_) => {
                                 let (status, seq_removed) = if let Some(seq) = dlq_seq {
                                     match dp.remove_from_dlq(&entity_path, seq).await {
-                                        Ok(true) => ("Resent and removed from DLQ".to_string(), Some(seq)),
-                                        Ok(false) => ("Resent (DLQ message not found to remove)".to_string(), None),
-                                        Err(e) => (format!("Resent, but DLQ cleanup failed: {}", e), None),
+                                        Ok(true) => {
+                                            ("Resent and removed from DLQ".to_string(), Some(seq))
+                                        }
+                                        Ok(false) => (
+                                            "Resent (DLQ message not found to remove)".to_string(),
+                                            None,
+                                        ),
+                                        Err(e) => {
+                                            (format!("Resent, but DLQ cleanup failed: {}", e), None)
+                                        }
                                     }
                                 } else {
                                     ("Message resent successfully".to_string(), None)
@@ -810,8 +879,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
         }
 
         // Bulk resend from DLQ (messages panel R key)
-        if app.status_message == "Bulk resending..." && app.data_plane.is_some() && !app.bg_running {
-            if let ActiveModal::ConfirmBulkResend { ref entity_path, count, is_topic } = app.modal {
+        if app.status_message == "Bulk resending..." && app.data_plane.is_some() && !app.bg_running
+        {
+            if let ActiveModal::ConfirmBulkResend {
+                ref entity_path,
+                count,
+                is_topic,
+            } = app.modal
+            {
                 let entity_path = entity_path.clone();
                 let dp = app.data_plane.clone().unwrap();
                 let max_count = count;
@@ -822,12 +897,25 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
 
                 app.bg_running = true;
                 app.modal = ActiveModal::None;
-                app.set_status(format!("Resending up to {} messages from DLQ (Esc to cancel)...", max_count));
+                app.set_status(format!(
+                    "Resending up to {} messages from DLQ (Esc to cancel)...",
+                    max_count
+                ));
 
                 tokio::spawn(async move {
-                    let pairs = match resolve_resend_pairs(mgmt.as_ref(), &entity_path, &send_target, is_topic).await {
+                    let pairs = match resolve_resend_pairs(
+                        mgmt.as_ref(),
+                        &entity_path,
+                        &send_target,
+                        is_topic,
+                    )
+                    .await
+                    {
                         Ok(p) => p,
-                        Err(e) => { let _ = tx.send(BgEvent::Failed(e)); return; }
+                        Err(e) => {
+                            let _ = tx.send(BgEvent::Failed(e));
+                            return;
+                        }
                     };
 
                     match resend_dlq_loop(&dp, &pairs, Some(max_count), &cancel, &tx).await {
@@ -848,7 +936,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
 
         // Bulk delete messages (messages panel D key)
         if app.status_message == "Bulk deleting..." && app.data_plane.is_some() && !app.bg_running {
-            if let ActiveModal::ConfirmBulkDelete { ref entity_path, count: _, is_dlq, is_topic } = app.modal {
+            if let ActiveModal::ConfirmBulkDelete {
+                ref entity_path,
+                count: _,
+                is_dlq,
+                is_topic,
+            } = app.modal
+            {
                 let dp = app.data_plane.clone().unwrap();
                 let path = entity_path.clone();
                 let was_dlq = is_dlq;
@@ -861,24 +955,35 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 app.set_status("Purging messages...");
 
                 tokio::spawn(async move {
-                    let paths = match resolve_purge_paths(mgmt.as_ref(), &path, is_topic, was_dlq).await {
-                        Ok(p) => p,
-                        Err(e) => { let _ = tx.send(BgEvent::Failed(e)); return; }
-                    };
+                    let paths =
+                        match resolve_purge_paths(mgmt.as_ref(), &path, is_topic, was_dlq).await {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = tx.send(BgEvent::Failed(e));
+                                return;
+                            }
+                        };
 
                     let mut deleted = 0u64;
                     for delete_path in &paths {
-                        match dp.purge_concurrent(delete_path, 32, Some(cancel.clone()), None).await {
+                        match dp
+                            .purge_concurrent(delete_path, 32, Some(cancel.clone()), None)
+                            .await
+                        {
                             Ok(n) => deleted += n,
                             Err(e) => {
                                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                                     let _ = tx.send(BgEvent::Cancelled {
-                                        message: format!("Cancelled after deleting {} messages", deleted),
+                                        message: format!(
+                                            "Cancelled after deleting {} messages",
+                                            deleted
+                                        ),
                                     });
                                 } else {
-                                    let _ = tx.send(BgEvent::Failed(
-                                        format!("Purge failed after {} messages: {}", deleted, e),
-                                    ));
+                                    let _ = tx.send(BgEvent::Failed(format!(
+                                        "Purge failed after {} messages: {}",
+                                        deleted, e
+                                    )));
                                 }
                                 return;
                             }
@@ -889,7 +994,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             message: format!("Cancelled after deleting {} messages", deleted),
                         });
                     } else {
-                        let _ = tx.send(BgEvent::BulkDeleteComplete { deleted: deleted as u32, was_dlq });
+                        let _ = tx.send(BgEvent::BulkDeleteComplete {
+                            deleted: deleted as u32,
+                            was_dlq,
+                        });
                     }
                 });
             }

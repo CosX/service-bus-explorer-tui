@@ -19,7 +19,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // title bar
-            Constraint::Min(10),  // body
+            Constraint::Min(10),   // body
             Constraint::Length(1), // status bar
         ])
         .split(size);
@@ -30,8 +30,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else {
         " Service Bus Explorer — Not Connected ".to_string()
     };
-    let title_bar = Paragraph::new(title)
-        .style(Style::default().bg(Color::Blue).fg(Color::White).bold());
+    let title_bar =
+        Paragraph::new(title).style(Style::default().bg(Color::Blue).fg(Color::White).bold());
     frame.render_widget(title_bar, outer[0]);
 
     // Body: [tree | detail+messages]

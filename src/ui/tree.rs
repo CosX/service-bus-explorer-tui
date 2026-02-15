@@ -47,7 +47,11 @@ pub fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
             };
 
             let expand_indicator = if node.has_children {
-                if node.expanded { "▼ " } else { "▶ " }
+                if node.expanded {
+                    "▼ "
+                } else {
+                    "▶ "
+                }
             } else {
                 "  "
             };
@@ -60,7 +64,10 @@ pub fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
                 _ => String::new(),
             };
 
-            let line = format!("{}{}{} {}{}", indent, expand_indicator, icon, node.label, count_str);
+            let line = format!(
+                "{}{}{} {}{}",
+                indent, expand_indicator, icon, node.label, count_str
+            );
 
             let style = if idx == app.tree_selected && is_focused {
                 Style::default().bg(Color::DarkGray).fg(Color::White).bold()
@@ -69,9 +76,9 @@ pub fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 match node.entity_type {
                     EntityType::DeadLetterQueue => Style::default().fg(Color::Red),
-                    EntityType::QueueFolder | EntityType::TopicFolder | EntityType::SubscriptionFolder => {
-                        Style::default().fg(Color::Blue)
-                    }
+                    EntityType::QueueFolder
+                    | EntityType::TopicFolder
+                    | EntityType::SubscriptionFolder => Style::default().fg(Color::Blue),
                     _ => Style::default(),
                 }
             };

@@ -37,7 +37,10 @@ fn redact_connection_string_for_preview(conn_str: &str) -> String {
     }
 
     match (endpoint, key_name) {
-        (Some(ep), Some(kn)) => format!("Endpoint={}; SharedAccessKeyName={}; SharedAccessKey=***", ep, kn),
+        (Some(ep), Some(kn)) => format!(
+            "Endpoint={}; SharedAccessKeyName={}; SharedAccessKey=***",
+            ep, kn
+        ),
         (Some(ep), None) => format!("Endpoint={}; SharedAccessKey=***", ep),
         _ => "(redacted SAS connection)".to_string(),
     }
@@ -57,7 +60,9 @@ pub fn render_modal(frame: &mut Frame, app: &App) {
             render_form(frame, app, "Create Subscription", "F2 to create")
         }
         ActiveModal::ConfirmDelete(path) => render_confirm_delete(frame, path),
-        ActiveModal::ConfirmBulkResend { entity_path, count, .. } => {
+        ActiveModal::ConfirmBulkResend {
+            entity_path, count, ..
+        } => {
             render_confirm_bulk(
                 frame,
                 "Bulk Resend from DLQ",
@@ -68,7 +73,12 @@ pub fn render_modal(frame: &mut Frame, app: &App) {
                 Color::Yellow,
             );
         }
-        ActiveModal::ConfirmBulkDelete { entity_path, count, is_dlq, .. } => {
+        ActiveModal::ConfirmBulkDelete {
+            entity_path,
+            count,
+            is_dlq,
+            ..
+        } => {
             let target = if *is_dlq { "DLQ" } else { "main queue" };
             render_confirm_bulk(
                 frame,
@@ -152,7 +162,7 @@ fn render_connection_input(frame: &mut Frame, app: &App) {
     let hint = Paragraph::new(
         "Paste your Service Bus connection string (masked) (Enter to connect, Esc to cancel)",
     )
-        .style(Style::default().fg(Color::DarkGray));
+    .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(hint, layout[0]);
 
     let masked = mask_secret_ascii_keep_suffix(app.input_buffer.as_str(), 4);
@@ -195,10 +205,7 @@ fn render_connection_list(frame: &mut Frame, app: &App) {
                 Style::default()
             };
             let detail = if conn.is_azure_ad() {
-                format!(
-                    "[AD] {}",
-                    conn.namespace.as_deref().unwrap_or("?")
-                )
+                format!("[AD] {}", conn.namespace.as_deref().unwrap_or("?"))
             } else {
                 let preview = redact_connection_string_for_preview(
                     conn.connection_string.as_deref().unwrap_or(""),
@@ -264,10 +271,7 @@ fn render_azure_ad_input(frame: &mut Frame, app: &App) {
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2),
-            Constraint::Length(3),
-        ])
+        .constraints([Constraint::Length(2), Constraint::Length(3)])
         .margin(1)
         .split(inner);
 
@@ -361,8 +365,11 @@ fn render_form(frame: &mut Frame, app: &App, title: &str, hint: &str) {
     // Hint line
     let hint_idx = app.input_fields.len() * 2;
     if hint_idx < layout.len() {
-        let hint_widget = Paragraph::new(format!("Tab/↑↓ navigate · ←→/Home/End cursor · {} · Esc cancel", hint))
-            .style(Style::default().fg(Color::DarkGray));
+        let hint_widget = Paragraph::new(format!(
+            "Tab/↑↓ navigate · ←→/Home/End cursor · {} · Esc cancel",
+            hint
+        ))
+        .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(hint_widget, layout[hint_idx]);
     }
 }
@@ -456,8 +463,8 @@ fn render_peek_count_input(frame: &mut Frame, app: &App) {
         .margin(1)
         .split(inner);
 
-    let label = Paragraph::new("How many messages to peek?")
-        .style(Style::default().fg(Color::White));
+    let label =
+        Paragraph::new("How many messages to peek?").style(Style::default().fg(Color::White));
     frame.render_widget(label, layout[0]);
 
     let input = Paragraph::new(app.input_buffer.as_str())
@@ -469,8 +476,8 @@ fn render_peek_count_input(frame: &mut Frame, app: &App) {
         );
     frame.render_widget(input, layout[2]);
 
-    let hint = Paragraph::new("Enter to peek · Esc to cancel")
-        .style(Style::default().fg(Color::DarkGray));
+    let hint =
+        Paragraph::new("Enter to peek · Esc to cancel").style(Style::default().fg(Color::DarkGray));
     frame.render_widget(hint, layout[3]);
 
     // Cursor

@@ -31,11 +31,7 @@ impl DataPlaneClient {
     // ────────── Send ──────────
 
     /// Send a message to a queue or topic.
-    pub async fn send_message(
-        &self,
-        entity_path: &str,
-        message: &ServiceBusMessage,
-    ) -> Result<()> {
+    pub async fn send_message(&self, entity_path: &str, message: &ServiceBusMessage) -> Result<()> {
         let entity_path = Self::normalize_path(entity_path);
         let url = format!(
             "{}/{}/messages?api-version=2017-04",
@@ -43,17 +39,13 @@ impl DataPlaneClient {
         );
         let token = self.config.entity_token(&entity_path).await?;
 
-        let mut req = self
-            .http
-            .post(&url)
-            .header("Authorization", token)
-            .header(
-                "Content-Type",
-                message
-                    .content_type
-                    .as_deref()
-                    .unwrap_or("application/json"),
-            );
+        let mut req = self.http.post(&url).header("Authorization", token).header(
+            "Content-Type",
+            message
+                .content_type
+                .as_deref()
+                .unwrap_or("application/json"),
+        );
 
         // Build BrokerProperties JSON header
         let mut broker_props = serde_json::Map::new();
@@ -81,10 +73,7 @@ impl DataPlaneClient {
             }
         }
         if let Some(ref v) = message.scheduled_enqueue_time {
-            broker_props.insert(
-                "ScheduledEnqueueTimeUtc".into(),
-                Value::String(v.clone()),
-            );
+            broker_props.insert("ScheduledEnqueueTimeUtc".into(), Value::String(v.clone()));
         }
         if let Some(ref v) = message.partition_key {
             broker_props.insert("PartitionKey".into(), Value::String(v.clone()));
@@ -159,10 +148,7 @@ impl DataPlaneClient {
     ///
     /// Uses `timeout=1` to avoid the 60-second default server-side long-poll
     /// when the entity is empty.
-    pub async fn receive_and_delete(
-        &self,
-        entity_path: &str,
-    ) -> Result<Option<ReceivedMessage>> {
+    pub async fn receive_and_delete(&self, entity_path: &str) -> Result<Option<ReceivedMessage>> {
         let entity_path = Self::normalize_path(entity_path);
         let url = format!(
             "{}/{}/messages/head?api-version=2017-04&timeout=1",
@@ -318,11 +304,7 @@ impl DataPlaneClient {
     /// Peek-locks messages one at a time, looking for a matching sequence number.
     /// Completes the match and abandons any non-matching messages that were locked
     /// along the way.  Returns `true` if the message was found and removed.
-    pub async fn remove_from_dlq(
-        &self,
-        entity_path: &str,
-        sequence_number: i64,
-    ) -> Result<bool> {
+    pub async fn remove_from_dlq(&self, entity_path: &str, sequence_number: i64) -> Result<bool> {
         let dlq_path = format!("{}/$deadletterqueue", entity_path);
         let mut abandoned_uris: Vec<String> = Vec::new();
         let max_attempts = 50u32;
@@ -434,7 +416,6 @@ impl DataPlaneClient {
 
         Ok(count.load(Ordering::Relaxed))
     }
-
 }
 
 // ──────────────────────────── Response parsing ────────────────────────────
@@ -466,11 +447,7 @@ async fn parse_received_message(resp: reqwest::Response) -> Result<ReceivedMessa
         .map(|(name, value)| {
             (
                 name.to_string(),
-                value
-                    .to_str()
-                    .unwrap_or("")
-                    .trim_matches('"')
-                    .to_string(),
+                value.to_str().unwrap_or("").trim_matches('"').to_string(),
             )
         })
         .collect();

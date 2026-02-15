@@ -195,15 +195,15 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
         KeyCode::Char('x') => {
             if app.bg_running {
                 app.set_status("A background operation is in progress...");
-            } else if let Some((path, entity_type)) = app.selected_entity() {
-                match entity_type {
-                    EntityType::Queue | EntityType::Topic | EntityType::Subscription => {
-                        let path = path.to_string();
-                        app.modal = ActiveModal::ConfirmDelete(path);
-                        app.input_buffer.clear();
-                    }
-                    _ => {}
-                }
+            } else if let Some((
+                path,
+                entity_type @ (EntityType::Queue | EntityType::Topic | EntityType::Subscription),
+            )) = app.selected_entity()
+            {
+                let _ = entity_type;
+                let path = path.to_string();
+                app.modal = ActiveModal::ConfirmDelete(path);
+                app.input_buffer.clear();
             }
         }
         // 'd' = peek dead-letter queue for selected entity
@@ -333,7 +333,9 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
                             }
                         }
                         _ => {
-                            app.set_status("Select a queue, topic, or subscription to resend DLQ messages");
+                            app.set_status(
+                                "Select a queue, topic, or subscription to resend DLQ messages",
+                            );
                         }
                     }
                 }
@@ -350,7 +352,11 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
                     EntityType::Queue | EntityType::Subscription | EntityType::Topic => {
                         let is_dlq = app.message_tab == MessageTab::DeadLetter;
                         let is_topic = *entity_type == EntityType::Topic;
-                        let msgs = if is_dlq { &app.dlq_messages } else { &app.messages };
+                        let msgs = if is_dlq {
+                            &app.dlq_messages
+                        } else {
+                            &app.messages
+                        };
                         let count = msgs.len() as u32;
                         if count > 0 {
                             app.modal = ActiveModal::ConfirmBulkDelete {
@@ -432,7 +438,8 @@ fn handle_modal_input(app: &mut App, key: KeyEvent) {
                     };
                     match app.connect_azure_ad(&fqns) {
                         Ok(_) => {
-                            app.config.add_azure_ad_connection(fqns.clone(), fqns.clone());
+                            app.config
+                                .add_azure_ad_connection(fqns.clone(), fqns.clone());
                             let _ = app.config.save();
                             app.connection_name = Some(fqns);
                             app.modal = ActiveModal::None;
@@ -591,7 +598,10 @@ fn handle_modal_input(app: &mut App, key: KeyEvent) {
                         Ok(_) => {
                             app.connection_name = Some(name);
                             app.modal = ActiveModal::None;
-                            app.set_status(format!("Connected via {}! Loading entities...", auth_label));
+                            app.set_status(format!(
+                                "Connected via {}! Loading entities...",
+                                auth_label
+                            ));
                         }
                         Err(e) => {
                             app.set_error(format!("Connection failed: {}", e));
@@ -630,8 +640,7 @@ fn handle_modal_input(app: &mut App, key: KeyEvent) {
                                 .as_ref()
                                 .map(|c| c.namespace.clone())
                                 .unwrap_or_else(|| "default".to_string());
-                            app.config
-                                .add_connection(ns.clone(), cs);
+                            app.config.add_connection(ns.clone(), cs);
                             let _ = app.config.save();
                             app.connection_name = Some(ns);
                             app.modal = ActiveModal::None;

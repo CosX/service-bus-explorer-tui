@@ -286,10 +286,7 @@ fn queue_description_xml(desc: &QueueDescription) -> String {
         xml.push_str(&format!("<AutoDeleteOnIdle>{}</AutoDeleteOnIdle>", v));
     }
     if let Some(v) = desc.enable_partitioning {
-        xml.push_str(&format!(
-            "<EnablePartitioning>{}</EnablePartitioning>",
-            v
-        ));
+        xml.push_str(&format!("<EnablePartitioning>{}</EnablePartitioning>", v));
     }
     xml.push_str("</QueueDescription>");
     xml
@@ -330,10 +327,7 @@ fn topic_description_xml(desc: &TopicDescription) -> String {
         xml.push_str(&format!("<AutoDeleteOnIdle>{}</AutoDeleteOnIdle>", v));
     }
     if let Some(v) = desc.enable_partitioning {
-        xml.push_str(&format!(
-            "<EnablePartitioning>{}</EnablePartitioning>",
-            v
-        ));
+        xml.push_str(&format!("<EnablePartitioning>{}</EnablePartitioning>", v));
     }
     xml.push_str("</TopicDescription>");
     xml
@@ -479,9 +473,7 @@ impl ManagementClient {
     }
 
     /// List queues with (active_message_count, dead_letter_message_count) from the same feed.
-    pub async fn list_queues_with_counts(
-        &self,
-    ) -> Result<Vec<(QueueDescription, i64, i64)>> {
+    pub async fn list_queues_with_counts(&self) -> Result<Vec<(QueueDescription, i64, i64)>> {
         let xml = self.get_atom("$Resources/Queues").await?;
         parse_queue_feed_with_counts(&xml)
     }
@@ -629,10 +621,7 @@ impl ManagementClient {
         sub_name: &str,
     ) -> Result<Vec<RuleDescription>> {
         let xml = self
-            .get_atom(&format!(
-                "{}/Subscriptions/{}/Rules",
-                topic_name, sub_name
-            ))
+            .get_atom(&format!("{}/Subscriptions/{}/Rules", topic_name, sub_name))
             .await?;
         parse_rule_feed(&xml)
     }
@@ -693,7 +682,9 @@ fn extract_element_value(xml: &str, tag: &str) -> Option<String> {
     if let Some(start_pos) = xml.find(&open) {
         let content_start = start_pos + open.len();
         if let Some(end_pos) = xml[content_start..].find(&close) {
-            let val = xml[content_start..content_start + end_pos].trim().to_string();
+            let val = xml[content_start..content_start + end_pos]
+                .trim()
+                .to_string();
             if val.is_empty() {
                 return None;
             }
@@ -735,7 +726,7 @@ fn extract_value_any_ns(xml: &str, local_name: &str) -> Option<String> {
         return Some(v);
     }
     // Search for ":LocalName>" — any namespace prefix
-    let suffix = format!(":{}>" , local_name);
+    let suffix = format!(":{}>", local_name);
     if let Some(suffix_pos) = xml.find(&suffix) {
         // Walk backward to find the '<' that opens this tag
         let before = &xml[..suffix_pos];
@@ -775,10 +766,7 @@ fn parse_queue_from_entry(entry_xml: &str) -> QueueDescription {
         max_size_in_megabytes: parse_optional_i64(entry_xml, "MaxSizeInMegabytes"),
         requires_duplicate_detection: parse_optional_bool(entry_xml, "RequiresDuplicateDetection"),
         requires_session: parse_optional_bool(entry_xml, "RequiresSession"),
-        default_message_time_to_live: extract_element_value(
-            entry_xml,
-            "DefaultMessageTimeToLive",
-        ),
+        default_message_time_to_live: extract_element_value(entry_xml, "DefaultMessageTimeToLive"),
         dead_lettering_on_message_expiration: parse_optional_bool(
             entry_xml,
             "DeadLetteringOnMessageExpiration",
@@ -845,14 +833,8 @@ fn parse_topic_from_entry(entry_xml: &str) -> TopicDescription {
     TopicDescription {
         name,
         max_size_in_megabytes: parse_optional_i64(entry_xml, "MaxSizeInMegabytes"),
-        default_message_time_to_live: extract_element_value(
-            entry_xml,
-            "DefaultMessageTimeToLive",
-        ),
-        requires_duplicate_detection: parse_optional_bool(
-            entry_xml,
-            "RequiresDuplicateDetection",
-        ),
+        default_message_time_to_live: extract_element_value(entry_xml, "DefaultMessageTimeToLive"),
+        requires_duplicate_detection: parse_optional_bool(entry_xml, "RequiresDuplicateDetection"),
         duplicate_detection_history_time_window: extract_element_value(
             entry_xml,
             "DuplicateDetectionHistoryTimeWindow",
@@ -897,10 +879,7 @@ fn parse_subscription_from_entry(topic_name: &str, entry_xml: &str) -> Subscript
         topic_name: topic_name.to_string(),
         lock_duration: extract_element_value(entry_xml, "LockDuration"),
         requires_session: parse_optional_bool(entry_xml, "RequiresSession"),
-        default_message_time_to_live: extract_element_value(
-            entry_xml,
-            "DefaultMessageTimeToLive",
-        ),
+        default_message_time_to_live: extract_element_value(entry_xml, "DefaultMessageTimeToLive"),
         dead_lettering_on_message_expiration: parse_optional_bool(
             entry_xml,
             "DeadLetteringOnMessageExpiration",
@@ -922,10 +901,7 @@ fn parse_subscription_from_entry(topic_name: &str, entry_xml: &str) -> Subscript
     }
 }
 
-fn parse_subscription_feed(
-    topic_name: &str,
-    xml: &str,
-) -> Result<Vec<SubscriptionDescription>> {
+fn parse_subscription_feed(topic_name: &str, xml: &str) -> Result<Vec<SubscriptionDescription>> {
     Ok(extract_entries(xml)
         .into_iter()
         .map(|e| parse_subscription_from_entry(topic_name, &e))

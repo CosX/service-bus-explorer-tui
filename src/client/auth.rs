@@ -29,11 +29,13 @@ pub enum AuthMode {
 impl std::fmt::Debug for AuthMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Sas { shared_access_key_name, .. } => {
-                f.debug_struct("Sas")
-                    .field("shared_access_key_name", shared_access_key_name)
-                    .finish()
-            }
+            Self::Sas {
+                shared_access_key_name,
+                ..
+            } => f
+                .debug_struct("Sas")
+                .field("shared_access_key_name", shared_access_key_name)
+                .finish(),
             Self::AzureAd { .. } => f.write_str("AzureAd"),
         }
     }
@@ -76,9 +78,8 @@ impl ConnectionConfig {
             }
         }
 
-        let endpoint = endpoint.ok_or_else(|| {
-            ServiceBusError::InvalidConnectionString("missing Endpoint".into())
-        })?;
+        let endpoint = endpoint
+            .ok_or_else(|| ServiceBusError::InvalidConnectionString("missing Endpoint".into()))?;
         let key_name = key_name.ok_or_else(|| {
             ServiceBusError::InvalidConnectionString("missing SharedAccessKeyName".into())
         })?;
@@ -109,10 +110,7 @@ impl ConnectionConfig {
     ///
     /// `namespace` should be the fully-qualified namespace, e.g.
     /// `mynamespace.servicebus.windows.net`.
-    pub fn from_azure_ad(
-        namespace: &str,
-        credential: Arc<dyn TokenCredential>,
-    ) -> Self {
+    pub fn from_azure_ad(namespace: &str, credential: Arc<dyn TokenCredential>) -> Self {
         let namespace = namespace
             .trim_start_matches("sb://")
             .trim_end_matches('/')
@@ -155,9 +153,7 @@ impl ConnectionConfig {
     }
 
     /// Acquire a Bearer token from Azure AD.
-    async fn get_azure_ad_token(
-        credential: &dyn TokenCredential,
-    ) -> Result<String> {
+    async fn get_azure_ad_token(credential: &dyn TokenCredential) -> Result<String> {
         let token = credential
             .get_token(&[SERVICE_BUS_SCOPE])
             .await
@@ -171,17 +167,16 @@ impl ConnectionConfig {
     /// For Azure AD: acquires a Bearer token from the credential chain.
     pub async fn namespace_token(&self) -> Result<String> {
         match &self.auth_mode {
-            AuthMode::Sas { shared_access_key_name, shared_access_key } => {
-                Self::generate_sas_token(
-                    shared_access_key_name,
-                    shared_access_key,
-                    &self.endpoint,
-                    3600,
-                )
-            }
-            AuthMode::AzureAd { credential } => {
-                Self::get_azure_ad_token(credential.as_ref()).await
-            }
+            AuthMode::Sas {
+                shared_access_key_name,
+                shared_access_key,
+            } => Self::generate_sas_token(
+                shared_access_key_name,
+                shared_access_key,
+                &self.endpoint,
+                3600,
+            ),
+            AuthMode::AzureAd { credential } => Self::get_azure_ad_token(credential.as_ref()).await,
         }
     }
 
@@ -192,18 +187,14 @@ impl ConnectionConfig {
     /// regardless, but the API authorization matches the entity).
     pub async fn entity_token(&self, entity_path: &str) -> Result<String> {
         match &self.auth_mode {
-            AuthMode::Sas { shared_access_key_name, shared_access_key } => {
+            AuthMode::Sas {
+                shared_access_key_name,
+                shared_access_key,
+            } => {
                 let uri = format!("{}/{}", self.endpoint, entity_path);
-                Self::generate_sas_token(
-                    shared_access_key_name,
-                    shared_access_key,
-                    &uri,
-                    3600,
-                )
+                Self::generate_sas_token(shared_access_key_name, shared_access_key, &uri, 3600)
             }
-            AuthMode::AzureAd { credential } => {
-                Self::get_azure_ad_token(credential.as_ref()).await
-            }
+            AuthMode::AzureAd { credential } => Self::get_azure_ad_token(credential.as_ref()).await,
         }
     }
 }

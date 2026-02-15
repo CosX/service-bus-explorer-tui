@@ -28,13 +28,22 @@ pub fn render_detail(frame: &mut Frame, app: &App, area: Rect) {
             let mut rows = vec![
                 make_row("Name", &desc.name),
                 make_row("Status", desc.status.as_deref().unwrap_or("Active")),
-                make_row("Lock Duration", desc.lock_duration.as_deref().unwrap_or("-")),
+                make_row(
+                    "Lock Duration",
+                    desc.lock_duration.as_deref().unwrap_or("-"),
+                ),
                 make_row("Max Size (MB)", &opt_i64(desc.max_size_in_megabytes)),
-                make_row("Default TTL", desc.default_message_time_to_live.as_deref().unwrap_or("-")),
+                make_row(
+                    "Default TTL",
+                    desc.default_message_time_to_live.as_deref().unwrap_or("-"),
+                ),
                 make_row("Max Delivery Count", &opt_i32(desc.max_delivery_count)),
                 make_row("Requires Session", &opt_bool(desc.requires_session)),
                 make_row("Partitioning", &opt_bool(desc.enable_partitioning)),
-                make_row("DLQ on Expiry", &opt_bool(desc.dead_lettering_on_message_expiration)),
+                make_row(
+                    "DLQ on Expiry",
+                    &opt_bool(desc.dead_lettering_on_message_expiration),
+                ),
             ];
 
             if let Some(ref fwd) = desc.forward_to {
@@ -46,9 +55,18 @@ pub fn render_detail(frame: &mut Frame, app: &App, area: Rect) {
 
             if let Some(rt) = runtime {
                 rows.push(make_row("──────────", "──────────"));
-                rows.push(make_row("Active Messages", &rt.active_message_count.to_string()));
-                rows.push(make_row("Dead-letter", &rt.dead_letter_message_count.to_string()));
-                rows.push(make_row("Scheduled", &rt.scheduled_message_count.to_string()));
+                rows.push(make_row(
+                    "Active Messages",
+                    &rt.active_message_count.to_string(),
+                ));
+                rows.push(make_row(
+                    "Dead-letter",
+                    &rt.dead_letter_message_count.to_string(),
+                ));
+                rows.push(make_row(
+                    "Scheduled",
+                    &rt.scheduled_message_count.to_string(),
+                ));
                 rows.push(make_row("Size (bytes)", &rt.size_in_bytes.to_string()));
             }
 
@@ -59,14 +77,23 @@ pub fn render_detail(frame: &mut Frame, app: &App, area: Rect) {
                 make_row("Name", &desc.name),
                 make_row("Status", desc.status.as_deref().unwrap_or("Active")),
                 make_row("Max Size (MB)", &opt_i64(desc.max_size_in_megabytes)),
-                make_row("Default TTL", desc.default_message_time_to_live.as_deref().unwrap_or("-")),
+                make_row(
+                    "Default TTL",
+                    desc.default_message_time_to_live.as_deref().unwrap_or("-"),
+                ),
                 make_row("Partitioning", &opt_bool(desc.enable_partitioning)),
             ];
 
             if let Some(rt) = runtime {
                 rows.push(make_row("──────────", "──────────"));
-                rows.push(make_row("Subscriptions", &rt.subscription_count.to_string()));
-                rows.push(make_row("Scheduled", &rt.scheduled_message_count.to_string()));
+                rows.push(make_row(
+                    "Subscriptions",
+                    &rt.subscription_count.to_string(),
+                ));
+                rows.push(make_row(
+                    "Scheduled",
+                    &rt.scheduled_message_count.to_string(),
+                ));
                 rows.push(make_row("Size (bytes)", &rt.size_in_bytes.to_string()));
             }
 
@@ -77,8 +104,14 @@ pub fn render_detail(frame: &mut Frame, app: &App, area: Rect) {
                 make_row("Name", &desc.name),
                 make_row("Topic", &desc.topic_name),
                 make_row("Status", desc.status.as_deref().unwrap_or("Active")),
-                make_row("Lock Duration", desc.lock_duration.as_deref().unwrap_or("-")),
-                make_row("Default TTL", desc.default_message_time_to_live.as_deref().unwrap_or("-")),
+                make_row(
+                    "Lock Duration",
+                    desc.lock_duration.as_deref().unwrap_or("-"),
+                ),
+                make_row(
+                    "Default TTL",
+                    desc.default_message_time_to_live.as_deref().unwrap_or("-"),
+                ),
                 make_row("Max Delivery Count", &opt_i32(desc.max_delivery_count)),
             ];
 
@@ -88,8 +121,14 @@ pub fn render_detail(frame: &mut Frame, app: &App, area: Rect) {
 
             if let Some(rt) = runtime {
                 rows.push(make_row("──────────", "──────────"));
-                rows.push(make_row("Active Messages", &rt.active_message_count.to_string()));
-                rows.push(make_row("Dead-letter", &rt.dead_letter_message_count.to_string()));
+                rows.push(make_row(
+                    "Active Messages",
+                    &rt.active_message_count.to_string(),
+                ));
+                rows.push(make_row(
+                    "Dead-letter",
+                    &rt.dead_letter_message_count.to_string(),
+                ));
             }
 
             render_table(frame, area, block, rows);

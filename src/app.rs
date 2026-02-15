@@ -1,6 +1,6 @@
+use ratatui::widgets::{ListState, TableState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use ratatui::widgets::{ListState, TableState};
 use tokio::sync::mpsc;
 
 use crate::client::models::*;
@@ -10,10 +10,20 @@ use crate::config::AppConfig;
 /// Events sent from background tasks back to the main loop.
 pub enum BgEvent {
     Progress(String),
-    PurgeComplete { count: u64 },
-    ResendComplete { resent: u32, errors: u32 },
-    BulkDeleteComplete { deleted: u32, was_dlq: bool },
-    Cancelled { message: String },
+    PurgeComplete {
+        count: u64,
+    },
+    ResendComplete {
+        resent: u32,
+        errors: u32,
+    },
+    BulkDeleteComplete {
+        deleted: u32,
+        was_dlq: bool,
+    },
+    Cancelled {
+        message: String,
+    },
     Failed(String),
 
     // Non-blocking async operation results
@@ -21,7 +31,7 @@ pub enum BgEvent {
         tree: TreeNode,
         flat_nodes: Vec<FlatNode>,
     },
-    DetailLoaded(DetailView),
+    DetailLoaded(Box<DetailView>),
     PeekComplete {
         messages: Vec<ReceivedMessage>,
         is_dlq: bool,
@@ -64,8 +74,17 @@ pub enum ActiveModal {
     CreateTopic,
     CreateSubscription,
     ConfirmDelete(String),
-    ConfirmBulkResend { entity_path: String, count: u32, is_topic: bool },
-    ConfirmBulkDelete { entity_path: String, count: u32, is_dlq: bool, is_topic: bool },
+    ConfirmBulkResend {
+        entity_path: String,
+        count: u32,
+        is_topic: bool,
+    },
+    ConfirmBulkDelete {
+        entity_path: String,
+        count: u32,
+        is_dlq: bool,
+        is_topic: bool,
+    },
     PeekCountInput,
     EditResend,
     ClearOptions {
@@ -236,8 +255,9 @@ impl App {
 
     /// Connect to a Service Bus namespace using Azure AD (Microsoft Entra ID).
     pub fn connect_azure_ad(&mut self, namespace: &str) -> crate::client::Result<()> {
-        let credential = azure_identity::DefaultAzureCredential::new()
-            .map_err(|e| crate::client::ServiceBusError::Auth(format!("Azure AD credential error: {}", e)))?;
+        let credential = azure_identity::DefaultAzureCredential::new().map_err(|e| {
+            crate::client::ServiceBusError::Auth(format!("Azure AD credential error: {}", e))
+        })?;
         let cfg = ConnectionConfig::from_azure_ad(namespace, credential);
         self.management = Some(ManagementClient::new(cfg.clone()));
         self.data_plane = Some(DataPlaneClient::new(cfg.clone()));
@@ -388,10 +408,7 @@ impl App {
                 msg.broker_properties.label.clone().unwrap_or_default(),
             ),
             ("TTL (seconds)".to_string(), String::new()),
-            (
-                "Custom Properties (k=v,...)".to_string(),
-                custom_props_str,
-            ),
+            ("Custom Properties (k=v,...)".to_string(), custom_props_str),
         ];
         self.input_field_index = 0;
         self.form_cursor = self.input_fields[0].1.len();
@@ -399,17 +416,16 @@ impl App {
 
     /// Build a ServiceBusMessage from the current send form fields.
     pub fn build_message_from_form(&self) -> ServiceBusMessage {
-        let get = |idx: usize| -> Option<String> {
-            self.input_fields
-                .get(idx)
-                .and_then(|(_, v)| {
+        let get =
+            |idx: usize| -> Option<String> {
+                self.input_fields.get(idx).and_then(|(_, v)| {
                     if v.is_empty() {
                         None
                     } else {
                         Some(v.clone())
                     }
                 })
-        };
+            };
 
         let custom_props: Vec<(String, String)> = get(7)
             .map(|s| {
@@ -459,20 +475,19 @@ impl App {
     }
 
     pub fn build_queue_from_form(&self) -> QueueDescription {
-        let get_str = |idx: usize| -> Option<String> {
-            self.input_fields.get(idx).and_then(|(_, v)| {
-                if v.is_empty() { None } else { Some(v.clone()) }
-            })
-        };
-        let get_i64 = |idx: usize| -> Option<i64> {
-            get_str(idx).and_then(|v| v.parse().ok())
-        };
-        let get_i32 = |idx: usize| -> Option<i32> {
-            get_str(idx).and_then(|v| v.parse().ok())
-        };
-        let get_bool = |idx: usize| -> Option<bool> {
-            get_str(idx).and_then(|v| v.parse().ok())
-        };
+        let get_str =
+            |idx: usize| -> Option<String> {
+                self.input_fields.get(idx).and_then(|(_, v)| {
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some(v.clone())
+                    }
+                })
+            };
+        let get_i64 = |idx: usize| -> Option<i64> { get_str(idx).and_then(|v| v.parse().ok()) };
+        let get_i32 = |idx: usize| -> Option<i32> { get_str(idx).and_then(|v| v.parse().ok()) };
+        let get_bool = |idx: usize| -> Option<bool> { get_str(idx).and_then(|v| v.parse().ok()) };
 
         QueueDescription {
             name: get_str(0).unwrap_or_default(),
@@ -501,11 +516,16 @@ impl App {
     }
 
     pub fn build_topic_from_form(&self) -> TopicDescription {
-        let get_str = |idx: usize| -> Option<String> {
-            self.input_fields.get(idx).and_then(|(_, v)| {
-                if v.is_empty() { None } else { Some(v.clone()) }
-            })
-        };
+        let get_str =
+            |idx: usize| -> Option<String> {
+                self.input_fields.get(idx).and_then(|(_, v)| {
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some(v.clone())
+                    }
+                })
+            };
 
         TopicDescription {
             name: get_str(0).unwrap_or_default(),
@@ -533,11 +553,16 @@ impl App {
     }
 
     pub fn build_subscription_from_form(&self) -> SubscriptionDescription {
-        let get_str = |idx: usize| -> Option<String> {
-            self.input_fields.get(idx).and_then(|(_, v)| {
-                if v.is_empty() { None } else { Some(v.clone()) }
-            })
-        };
+        let get_str =
+            |idx: usize| -> Option<String> {
+                self.input_fields.get(idx).and_then(|(_, v)| {
+                    if v.is_empty() {
+                        None
+                    } else {
+                        Some(v.clone())
+                    }
+                })
+            };
 
         SubscriptionDescription {
             topic_name: get_str(0).unwrap_or_default(),
@@ -571,10 +596,8 @@ pub async fn build_tree(
     namespace: String,
 ) -> crate::client::Result<(TreeNode, Vec<FlatNode>)> {
     // Parallel fetch: queues + topics in one round trip pair
-    let (queues_result, topics_result) = tokio::join!(
-        mgmt.list_queues_with_counts(),
-        mgmt.list_topics()
-    );
+    let (queues_result, topics_result) =
+        tokio::join!(mgmt.list_queues_with_counts(), mgmt.list_topics());
     let queues = queues_result?;
     let topics = topics_result?;
 

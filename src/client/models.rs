@@ -103,6 +103,7 @@ pub struct RuleDescription {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[allow(clippy::enum_variant_names)]
 pub enum RuleFilter {
     #[default]
     TrueFilter,

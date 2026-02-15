@@ -16,7 +16,7 @@ pub fn sanitize_for_terminal(input: &str, allow_newlines: bool) -> String {
                     // CSI: ESC [ ... <final>
                     Some('[') => {
                         let _ = chars.next();
-                        while let Some(c) = chars.next() {
+                        for c in chars.by_ref() {
                             if ('@'..='~').contains(&c) {
                                 break;
                             }
@@ -30,11 +30,9 @@ pub fn sanitize_for_terminal(input: &str, allow_newlines: bool) -> String {
                             if c == '\x07' {
                                 break;
                             }
-                            if c == '\x1b' {
-                                if matches!(chars.peek().copied(), Some('\\')) {
-                                    let _ = chars.next();
-                                    break;
-                                }
+                            if c == '\x1b' && matches!(chars.peek().copied(), Some('\\')) {
+                                let _ = chars.next();
+                                break;
                             }
                         }
                         out.push_str("[OSC]");

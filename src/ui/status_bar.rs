@@ -26,9 +26,11 @@ pub fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     let bar = Line::from(vec![
         left,
         Span::styled(
-            " ".repeat(area.width.saturating_sub(
-                app.status_message.len() as u16 + right_text.len() as u16 + 12,
-            ) as usize),
+            " ".repeat(
+                area.width
+                    .saturating_sub(app.status_message.len() as u16 + right_text.len() as u16 + 12)
+                    as usize,
+            ),
             Style::default().bg(Color::DarkGray),
         ),
         right,

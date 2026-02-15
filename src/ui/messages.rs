@@ -97,7 +97,7 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     .unwrap_or_else(|| "-".to_string()),
                 msg.broker_properties
                     .size
-                    .map(|v| format_size(v))
+                    .map(format_size)
                     .unwrap_or_else(|| "-".to_string()),
                 sanitize_for_terminal(
                     &msg.broker_properties
@@ -155,7 +155,10 @@ fn render_detail_readonly(frame: &mut Frame, app: &mut App, inner: Rect) {
     }
     if let Some(count) = msg.broker_properties.delivery_count {
         let count_str = count.to_string();
-        props_rows.push(Row::new(vec!["Delivery Count".to_string(), san(&count_str)]));
+        props_rows.push(Row::new(vec![
+            "Delivery Count".to_string(),
+            san(&count_str),
+        ]));
     }
     if let Some(ref label) = msg.broker_properties.label {
         props_rows.push(Row::new(vec!["Label".to_string(), san(label)]));
@@ -177,10 +180,7 @@ fn render_detail_readonly(frame: &mut Frame, app: &mut App, inner: Rect) {
 
     let detail_layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(props_height),
-            Constraint::Min(3),
-        ])
+        .constraints([Constraint::Length(props_height), Constraint::Min(3)])
         .split(inner);
 
     let props_table = Table::new(
@@ -204,7 +204,9 @@ fn render_detail_readonly(frame: &mut Frame, app: &mut App, inner: Rect) {
     let body_viewport = body_inner.inner(detail_layout[1]).height;
     // Clamp scroll so we don't scroll past the end
     if body_lines > body_viewport {
-        app.detail_body_scroll = app.detail_body_scroll.min(body_lines.saturating_sub(body_viewport));
+        app.detail_body_scroll = app
+            .detail_body_scroll
+            .min(body_lines.saturating_sub(body_viewport));
     } else {
         app.detail_body_scroll = 0;
     }
@@ -256,10 +258,10 @@ fn render_detail_edit(frame: &mut Frame, app: &mut App, inner: Rect) {
     let detail_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(dlq_height),  // DLQ info (read-only)
+            Constraint::Length(dlq_height),   // DLQ info (read-only)
             Constraint::Length(props_height), // editable properties
-            Constraint::Min(5),              // editable body
-            Constraint::Length(1),           // hint bar
+            Constraint::Min(5),               // editable body
+            Constraint::Length(1),            // hint bar
         ])
         .split(inner);
 
@@ -391,8 +393,10 @@ fn render_detail_edit(frame: &mut Frame, app: &mut App, inner: Rect) {
     }
 
     // ── Hint bar ──
-    let hint = Paragraph::new("Tab fields · ↑↓←→ navigate · Enter newline (body) · F2 resend · Esc cancel")
-        .style(Style::default().fg(Color::DarkGray));
+    let hint = Paragraph::new(
+        "Tab fields · ↑↓←→ navigate · Enter newline (body) · F2 resend · Esc cancel",
+    )
+    .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(hint, hint_area);
 }
 
