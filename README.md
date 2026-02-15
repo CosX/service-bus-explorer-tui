@@ -9,15 +9,19 @@ Built with Rust, [ratatui](https://ratatui.rs), and the Azure Service Bus REST A
 
 ## Features
 
-- Browse queues, topics, and subscriptions in a navigable tree
-- View entity properties and runtime metrics (message counts, sizes)
-- Peek messages and dead-letter queues
-- Send messages with custom properties
+- Browse queues, topics, and subscriptions in a navigable tree with inline message counts
+- View entity properties and runtime metrics (active, DLQ, scheduled, transfer counts)
+- Peek messages and dead-letter queues (with configurable count)
+- Send messages with custom properties, content type, TTL, session ID, and more
+- Edit & resend messages inline (WYSIWYG) — including DLQ messages back to the main entity
 - Create and delete queues, topics, and subscriptions
-- Purge messages from entities
-- Multiple saved connections with config persistence
-- Clipboard support for copying message bodies
+- Purge messages — concurrent delete, DLQ clear, or DLQ resend (with progress & cancellation)
+- Bulk resend DLQ → main entity and bulk delete from messages panel
+- Topic operations automatically fan out across all subscriptions
+- Multiple saved connections with config persistence (SAS and Azure AD)
+- Azure AD (Microsoft Entra ID) authentication via default credential chain
 - Vim-style keybindings
+- Terminal escape injection protection for untrusted message content
 
 ## Prerequisites
 
@@ -25,7 +29,9 @@ Built with Rust, [ratatui](https://ratatui.rs), and the Azure Service Bus REST A
   ```
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   ```
-- **An Azure Service Bus namespace** with a connection string (Shared Access Signature)
+- **An Azure Service Bus namespace** with either:
+  - A SAS connection string, or
+  - Azure AD credentials (via environment, CLI, managed identity, etc.)
 
 ## Build
 
@@ -57,14 +63,23 @@ On launch you'll see an empty tree panel. Press **`c`** to open the connection d
 
 ### Connect to a namespace
 
-1. Press **`c`** to open the connection prompt.
-2. Paste your Service Bus connection string:
+#### SAS connection string
+
+1. Press **`c`** to open the connection dialog.
+2. If you have saved connections, select one or press **`n`** to add a new one.
+3. Choose **SAS** and paste your connection string:
    ```
    Endpoint=sb://<namespace>.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=<key>
    ```
-3. Press **Enter**. The entity tree loads automatically.
+4. Press **Enter**. The entity tree loads automatically.
 
-The connection is saved to the config file so you can reconnect on next launch.
+#### Azure AD (Microsoft Entra ID)
+
+1. Press **`c`** → choose **Azure AD**.
+2. Enter your namespace name (e.g. `mynamespace` — `.servicebus.windows.net` is appended automatically).
+3. Press **Enter**. Authentication uses the default credential chain (`azure_identity`).
+
+Connections are saved to the config file for reconnection on next launch.
 
 ### Config file location
 
@@ -93,26 +108,39 @@ The connection is saved to the config file so you can reconnect on next launch.
 
 | Key              | Action                  |
 |------------------|-------------------------|
-| `c`              | Connect / switch        |
+| `c`              | Connect / manage connections |
 | `r` / `F5`      | Refresh entity tree     |
 
-### Entity operations
+### Tree panel — entity operations
 
-| Key              | Action                  |
-|------------------|-------------------------|
-| `n`              | Create new entity       |
-| `d`              | Delete selected entity  |
+| Key              | Action                             |
+|------------------|------------------------------------|
+| `n`              | Create new entity                  |
+| `x`              | Delete selected entity             |
+| `s`              | Send message to queue/topic        |
+| `p`              | Peek messages (prompts for count)  |
+| `d`              | Peek dead-letter queue             |
+| `P` (shift)      | Clear entity (delete / DLQ resend) |
 
-### Message operations
+### Messages panel
 
-| Key              | Action                  |
-|------------------|-------------------------|
-| `p`              | Peek messages           |
-| `s`              | Send message            |
-| `P` (shift)     | Purge all messages      |
-| `1` / `2`       | Switch Messages / DLQ   |
-| `Enter`          | View message detail     |
-| `Esc`            | Close detail view       |
+| Key              | Action                                   |
+|------------------|------------------------------------------|
+| `1` / `2`       | Switch Messages / DLQ tab                 |
+| `Enter`          | View message detail                      |
+| `Esc`            | Close detail view                        |
+| `e`              | Edit & resend message (inline WYSIWYG)   |
+| `R` (shift)      | Bulk resend all DLQ → main entity        |
+| `D` (shift)      | Bulk delete all visible messages         |
+
+### Form editing (send / create / edit)
+
+| Key                        | Action                     |
+|----------------------------|----------------------------|
+| `Tab` / `↑` / `↓`         | Navigate between fields    |
+| `Enter` (in Body field)   | Insert newline             |
+| `F2` / `Ctrl+Enter`       | Submit form                |
+| `Esc`                      | Cancel                     |
 
 ### General
 
@@ -120,36 +148,40 @@ The connection is saved to the config file so you can reconnect on next launch.
 |------------------|-------------------------|
 | `?`              | Show help overlay       |
 | `q` / `Ctrl+C`  | Quit                    |
+| `Esc`            | Cancel background operation |
 
 ## Architecture
 
 ```
 src/
-├── main.rs              # Entry point, async event loop, action dispatch
-├── app.rs               # Application state machine
-├── event.rs             # Keyboard input handling
-├── config.rs            # TOML config persistence
+├── main.rs              # Entry point, event loop, status-sentinel → async task dispatch
+├── app.rs               # App state, BgEvent enum, form builders, tree construction
+├── event.rs             # Input routing: global → modal → panel handlers
+├── config.rs            # TOML persistence (connections, settings, OS-specific paths)
 ├── client/
-│   ├── auth.rs          # SAS token generation, connection string parsing
-│   ├── models.rs        # Data models (queues, topics, subscriptions, messages)
-│   ├── management.rs    # Management plane (ATOM XML) — entity CRUD
-│   ├── data_plane.rs    # Data plane — send, peek, receive, purge
-│   └── error.rs         # Error types
+│   ├── auth.rs          # SAS token gen, Azure AD token, connection string parsing
+│   ├── management.rs    # Management plane: ATOM XML CRUD + raw XML parsing helpers
+│   ├── data_plane.rs    # Data plane: send, peek-lock, receive-delete, purge, bulk ops
+│   ├── models.rs        # Entity descriptions, message models, TreeNode/FlatNode
+│   └── error.rs         # ServiceBusError (thiserror) with Api, Auth, Xml variants
 └── ui/
-    ├── layout.rs        # Top-level layout composition
-    ├── tree.rs          # Entity tree widget
-    ├── detail.rs        # Property/runtime info panel
-    ├── messages.rs      # Message list and detail view
-    ├── modals.rs        # Connection, form, and confirm dialogs
-    ├── status_bar.rs    # Status bar
-    └── help.rs          # Keyboard shortcut overlay
+    ├── layout.rs        # Top-level 3-panel layout (tree | detail | messages)
+    ├── tree.rs          # Entity tree with inline message/DLQ counts
+    ├── messages.rs      # Message list + detail view + inline edit rendering
+    ├── modals.rs        # Connection, form, confirm, clear-options, peek-count dialogs
+    ├── detail.rs        # Entity properties/runtime info panel
+    ├── status_bar.rs    # Bottom status bar
+    ├── help.rs          # Full keyboard shortcut overlay
+    └── sanitize.rs      # Terminal escape injection prevention (CSI/OSC stripping)
 ```
 
 ### Design decisions
 
-- **No Azure SDK** — the official Rust SDK for Service Bus is unmaintained. The client layer uses `reqwest` against the REST API directly with HMAC-SHA256 SAS token auth.
-- **Synchronous event loop with async dispatch** — keyboard events are polled synchronously via `crossterm`; Service Bus API calls are dispatched as `async` operations within the same `tokio` runtime.
-- **ATOM XML parsing** — the management plane returns Atom feeds. Parsed with targeted string extraction rather than full serde XML deserialization to handle the inconsistent schema Azure returns.
+- **No Azure SDK** — the official Rust SDK for Service Bus is unmaintained. The client layer uses `reqwest` against the REST API directly with HMAC-SHA256 SAS token auth or Azure AD Bearer tokens.
+- **Synchronous event loop with async dispatch** — keyboard events are polled synchronously via `crossterm` at 100ms intervals; Service Bus API calls are spawned as `tokio` tasks that report results back through an `mpsc` channel.
+- **ATOM XML parsing** — the management plane returns Atom feeds with inconsistent schemas. Parsed with targeted string extraction (`extract_element`, `extract_element_value`) rather than full serde XML deserialization.
+- **Peek via peek-lock + abandon** — the REST API's `PeekOnly=true` has no cursor, so peek is implemented as peek-lock N messages then abandon all locks. This increments `DeliveryCount` on each peek.
+- **Concurrent purge** — message deletion spawns multiple parallel receive-and-delete workers (default 32) with progress reporting and cancellation support.
 
 ## License
 
