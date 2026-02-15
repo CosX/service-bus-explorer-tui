@@ -167,6 +167,23 @@ pub struct ReceivedMessage {
     pub lock_token_uri: Option<String>,
 }
 
+impl ReceivedMessage {
+    /// Convert to a sendable message, preserving body, metadata, and custom properties.
+    /// Drops broker-assigned fields (sequence number, enqueued time, delivery count, etc.).
+    pub fn to_sendable(&self) -> ServiceBusMessage {
+        ServiceBusMessage {
+            body: self.body.clone(),
+            content_type: self.broker_properties.content_type.clone(),
+            message_id: self.broker_properties.message_id.clone(),
+            correlation_id: self.broker_properties.correlation_id.clone(),
+            session_id: self.broker_properties.session_id.clone(),
+            label: self.broker_properties.label.clone(),
+            custom_properties: self.custom_properties.clone(),
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BrokerProperties {
     #[serde(rename = "MessageId")]

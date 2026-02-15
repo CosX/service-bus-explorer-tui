@@ -153,16 +153,6 @@ impl DataPlaneClient {
         Ok(messages)
     }
 
-    /// Peek dead-letter queue messages.
-    pub async fn peek_dead_letter_messages(
-        &self,
-        entity_path: &str,
-        count: i32,
-    ) -> Result<Vec<ReceivedMessage>> {
-        let dlq_path = format!("{}/$deadletterqueue", entity_path);
-        self.peek_messages(&dlq_path, count).await
-    }
-
     // ────────── Receive ──────────
 
     /// Receive and delete a message (destructive).
@@ -445,101 +435,6 @@ impl DataPlaneClient {
         Ok(count.load(Ordering::Relaxed))
     }
 
-    /// Purge all messages from an entity by receiving and deleting in a loop.
-    /// Fallback for older API versions. Returns the number of messages purged.
-    pub async fn purge(&self, entity_path: &str) -> Result<u64> {
-        let mut count = 0u64;
-        loop {
-            match self.receive_and_delete(entity_path).await? {
-                Some(_) => count += 1,
-                None => break,
-            }
-        }
-        Ok(count)
-    }
-
-    /// Purge the dead-letter queue.
-    pub async fn purge_dead_letter(&self, entity_path: &str) -> Result<u64> {
-        let dlq_path = format!("{}/$deadletterqueue", entity_path);
-        self.purge(&dlq_path).await
-    }
-
-    // ────────── Bulk Operations ──────────
-
-    /// Resend (move) messages from DLQ back to the main entity by peek-lock + complete + re-send.
-    /// Returns (resent_count, error_count).
-    pub async fn bulk_resend_dlq(
-        &self,
-        entity_path: &str,
-        max_count: u32,
-    ) -> Result<(u32, u32)> {
-        let dlq_path = format!("{}/$deadletterqueue", entity_path);
-        let mut resent = 0u32;
-        let mut errors = 0u32;
-
-        for _ in 0..max_count {
-            // Peek-lock from DLQ with short timeout to avoid long-poll freeze
-            let locked = match self.peek_lock(&dlq_path, 1).await? {
-                Some(msg) => msg,
-                None => break, // No more messages
-            };
-
-            let lock_uri = match locked.lock_token_uri {
-                Some(ref uri) => uri.clone(),
-                None => {
-                    errors += 1;
-                    continue;
-                }
-            };
-
-            // Re-send to the original entity
-            let resend_msg = ServiceBusMessage {
-                body: locked.body.clone(),
-                content_type: locked.broker_properties.content_type.clone(),
-                message_id: locked.broker_properties.message_id.clone(),
-                correlation_id: locked.broker_properties.correlation_id.clone(),
-                session_id: locked.broker_properties.session_id.clone(),
-                label: locked.broker_properties.label.clone(),
-                custom_properties: locked.custom_properties.clone(),
-                ..Default::default()
-            };
-
-            match self.send_message(entity_path, &resend_msg).await {
-                Ok(_) => {
-                    // Complete (remove) the DLQ message
-                    if self.complete_message(&lock_uri).await.is_ok() {
-                        resent += 1;
-                    } else {
-                        errors += 1;
-                    }
-                }
-                Err(_) => {
-                    // Abandon the lock so it goes back to DLQ
-                    let _ = self.abandon_message(&lock_uri).await;
-                    errors += 1;
-                }
-            }
-        }
-
-        Ok((resent, errors))
-    }
-
-    /// Bulk delete messages by receive-and-delete up to max_count.
-    /// Returns number of messages deleted.
-    pub async fn bulk_delete(
-        &self,
-        entity_path: &str,
-        max_count: u32,
-    ) -> Result<u32> {
-        let mut deleted = 0u32;
-        for _ in 0..max_count {
-            match self.receive_and_delete(entity_path).await? {
-                Some(_) => deleted += 1,
-                None => break,
-            }
-        }
-        Ok(deleted)
-    }
 }
 
 // ──────────────────────────── Response parsing ────────────────────────────

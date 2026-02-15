@@ -33,6 +33,141 @@ fn send_path_owned(entity_path: &str) -> String {
     send_path(entity_path).to_string()
 }
 
+/// Build a list of entity paths for purge/delete operations.
+/// Topics fan out to all subscription paths; non-topics return a single path.
+async fn resolve_purge_paths(
+    mgmt: Option<&client::ManagementClient>,
+    entity_path: &str,
+    is_topic: bool,
+    is_dlq: bool,
+) -> std::result::Result<Vec<String>, String> {
+    if is_topic {
+        let mgmt = mgmt.ok_or_else(|| "Not connected".to_string())?;
+        let subs = mgmt
+            .list_subscriptions(entity_path)
+            .await
+            .map_err(|e| format!("Failed to list subscriptions: {}", e))?;
+        Ok(subs
+            .iter()
+            .map(|s| {
+                let sub_path = format!("{}/subscriptions/{}", entity_path, s.name);
+                if is_dlq {
+                    format!("{}/$deadletterqueue", sub_path)
+                } else {
+                    sub_path
+                }
+            })
+            .collect())
+    } else if is_dlq {
+        Ok(vec![format!("{}/$deadletterqueue", entity_path)])
+    } else {
+        Ok(vec![entity_path.to_string()])
+    }
+}
+
+/// Build (dlq_path, send_target) pairs for DLQ resend operations.
+/// Topics fan out to all subscription DLQs, sending back to the topic.
+async fn resolve_resend_pairs(
+    mgmt: Option<&client::ManagementClient>,
+    entity_path: &str,
+    send_target: &str,
+    is_topic: bool,
+) -> std::result::Result<Vec<(String, String)>, String> {
+    if is_topic {
+        let mgmt = mgmt.ok_or_else(|| "Not connected".to_string())?;
+        let subs = mgmt
+            .list_subscriptions(entity_path)
+            .await
+            .map_err(|e| format!("Failed to list subscriptions: {}", e))?;
+        Ok(subs
+            .iter()
+            .map(|s| {
+                let dlq = format!(
+                    "{}/subscriptions/{}/$deadletterqueue",
+                    entity_path, s.name
+                );
+                (dlq, send_target.to_string())
+            })
+            .collect())
+    } else {
+        let dlq = format!("{}/$deadletterqueue", entity_path);
+        Ok(vec![(dlq, send_target.to_string())])
+    }
+}
+
+/// DLQ resend loop: peek-lock → send → complete, with progress and cancellation.
+/// If `max_per_path` is `None`, drains each path fully.
+async fn resend_dlq_loop(
+    dp: &client::DataPlaneClient,
+    pairs: &[(String, String)],
+    max_per_path: Option<u32>,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    tx: &tokio::sync::mpsc::UnboundedSender<BgEvent>,
+) -> std::result::Result<(u32, u32), String> {
+    let mut resent = 0u32;
+    let mut errors = 0u32;
+
+    for (dlq_path, send_target) in pairs {
+        let mut path_count = 0u32;
+        loop {
+            if let Some(max) = max_per_path {
+                if path_count >= max {
+                    break;
+                }
+            }
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(format!(
+                    "Cancelled after resending {} messages ({} errors)",
+                    resent, errors
+                ));
+            }
+
+            let locked = match dp.peek_lock(dlq_path, 1).await {
+                Ok(Some(msg)) => msg,
+                Ok(None) => break,
+                Err(e) => {
+                    return Err(format!(
+                        "Resend failed after {} messages: {}",
+                        resent, e
+                    ))
+                }
+            };
+
+            let lock_uri = match locked.lock_token_uri {
+                Some(ref uri) => uri.clone(),
+                None => {
+                    errors += 1;
+                    path_count += 1;
+                    continue;
+                }
+            };
+
+            match dp.send_message(send_target, &locked.to_sendable()).await {
+                Ok(_) => {
+                    if dp.complete_message(&lock_uri).await.is_ok() {
+                        resent += 1;
+                    } else {
+                        errors += 1;
+                    }
+                }
+                Err(_) => {
+                    let _ = dp.abandon_message(&lock_uri).await;
+                    errors += 1;
+                }
+            }
+
+            path_count += 1;
+            if (resent + errors) % 50 == 0 {
+                let _ = tx.send(BgEvent::Progress(format!(
+                    "Resent {} messages ({} errors)... (Esc to cancel)",
+                    resent, errors
+                )));
+            }
+        }
+    }
+    Ok((resent, errors))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Setup terminal
@@ -372,30 +507,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 app.set_status("Preparing purge...");
 
                 tokio::spawn(async move {
-                    // Build list of paths to purge
-                    let paths: Vec<String> = if is_topic {
-                        if let Some(mgmt) = mgmt {
-                            match mgmt.list_subscriptions(&entity_path).await {
-                                Ok(subs) => subs.iter().map(|s| {
-                                    let sub_path = format!("{}/subscriptions/{}", entity_path, s.name);
-                                    if is_dlq {
-                                        format!("{}/$deadletterqueue", sub_path)
-                                    } else {
-                                        sub_path
-                                    }
-                                }).collect(),
-                                Err(e) => {
-                                    let _ = tx.send(BgEvent::Failed(format!("Failed to list subscriptions: {}", e)));
-                                    return;
-                                }
-                            }
-                        } else {
-                            return;
-                        }
-                    } else if is_dlq {
-                        vec![format!("{}/$deadletterqueue", entity_path)]
-                    } else {
-                        vec![entity_path.clone()]
+                    let paths = match resolve_purge_paths(mgmt.as_ref(), &entity_path, is_topic, is_dlq).await {
+                        Ok(p) => p,
+                        Err(e) => { let _ = tx.send(BgEvent::Failed(e)); return; }
                     };
 
                     let _ = tx.send(BgEvent::Progress(
@@ -454,109 +568,39 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
         // Clear (resend) — spawn background resend of all DLQ messages
         if app.status_message == "Clearing (resend)..." && app.data_plane.is_some() && !app.bg_running {
             if let ActiveModal::ClearOptions { ref base_entity_path, is_topic, .. } = app.modal {
-                let base_entity_path = base_entity_path.clone();
+                let entity_path = base_entity_path.clone();
                 let dp = app.data_plane.clone().unwrap();
-                let topic_name = base_entity_path.clone();
                 let tx = app.bg_tx.clone();
                 let cancel = app.new_cancel_token();
                 let mgmt = app.management.as_ref().cloned();
+                let send_target = send_path_owned(&entity_path);
 
                 app.bg_running = true;
                 app.modal = ActiveModal::None;
                 app.set_status("Preparing DLQ resend...");
 
                 tokio::spawn(async move {
-                    // Build (dlq_path, send_path) pairs
-                    let pairs: Vec<(String, String)> = if is_topic {
-                        if let Some(mgmt) = mgmt {
-                            match mgmt.list_subscriptions(&topic_name).await {
-                                Ok(subs) => subs.iter().map(|s| {
-                                    let sub_path = format!("{}/subscriptions/{}", topic_name, s.name);
-                                    let dlq = format!("{}/$deadletterqueue", sub_path);
-                                    (dlq, topic_name.clone())
-                                }).collect(),
-                                Err(e) => {
-                                    let _ = tx.send(BgEvent::Failed(format!("Failed to list subscriptions: {}", e)));
-                                    return;
-                                }
-                            }
-                        } else {
-                            return;
-                        }
-                    } else {
-                        let dlq = format!("{}/$deadletterqueue", &base_entity_path);
-                        let target = send_path_owned(&base_entity_path);
-                        vec![(dlq, target)]
+                    let pairs = match resolve_resend_pairs(mgmt.as_ref(), &entity_path, &send_target, is_topic).await {
+                        Ok(p) => p,
+                        Err(e) => { let _ = tx.send(BgEvent::Failed(e)); return; }
                     };
 
                     let _ = tx.send(BgEvent::Progress(
                         format!("Resending all DLQ messages from {} path(s) (Esc to cancel)...", pairs.len()),
                     ));
 
-                    let mut resent = 0u32;
-                    let mut errors = 0u32;
-
-                    for (dlq_path, send_target) in &pairs {
-                        loop {
+                    match resend_dlq_loop(&dp, &pairs, None, &cancel, &tx).await {
+                        Ok((resent, errors)) => {
+                            let _ = tx.send(BgEvent::ResendComplete { resent, errors });
+                        }
+                        Err(msg) => {
                             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                                let _ = tx.send(BgEvent::Cancelled {
-                                    message: format!("Cancelled after resending {} messages ({} errors)", resent, errors),
-                                });
-                                return;
-                            }
-
-                            let locked = match dp.peek_lock(dlq_path, 1).await {
-                                Ok(Some(msg)) => msg,
-                                Ok(None) => break,
-                                Err(e) => {
-                                    let _ = tx.send(BgEvent::Failed(
-                                        format!("Resend failed after {} messages: {}", resent, e),
-                                    ));
-                                    return;
-                                }
-                            };
-
-                            let lock_uri = match locked.lock_token_uri {
-                                Some(ref uri) => uri.clone(),
-                                None => {
-                                    errors += 1;
-                                    continue;
-                                }
-                            };
-
-                            let resend_msg = crate::client::models::ServiceBusMessage {
-                                body: locked.body.clone(),
-                                content_type: locked.broker_properties.content_type.clone(),
-                                message_id: locked.broker_properties.message_id.clone(),
-                                correlation_id: locked.broker_properties.correlation_id.clone(),
-                                session_id: locked.broker_properties.session_id.clone(),
-                                label: locked.broker_properties.label.clone(),
-                                custom_properties: locked.custom_properties.clone(),
-                                ..Default::default()
-                            };
-
-                            match dp.send_message(send_target, &resend_msg).await {
-                                Ok(_) => {
-                                    if dp.complete_message(&lock_uri).await.is_ok() {
-                                        resent += 1;
-                                    } else {
-                                        errors += 1;
-                                    }
-                                }
-                                Err(_) => {
-                                    let _ = dp.abandon_message(&lock_uri).await;
-                                    errors += 1;
-                                }
-                            }
-
-                            if (resent + errors) % 50 == 0 {
-                                let _ = tx.send(BgEvent::Progress(
-                                    format!("Resent {} messages ({} errors)... (Esc to cancel)", resent, errors),
-                                ));
+                                let _ = tx.send(BgEvent::Cancelled { message: msg });
+                            } else {
+                                let _ = tx.send(BgEvent::Failed(msg));
                             }
                         }
                     }
-                    let _ = tx.send(BgEvent::ResendComplete { resent, errors });
                 });
             } else {
                 app.set_status("No entity selected");
@@ -629,8 +673,11 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
             }
         }
 
-        // Submit edit & resend message — modal (spawned)
-        if app.status_message == "Submitting..." && app.modal == ActiveModal::EditResend {
+        // Submit edit & resend — modal or inline (spawned)
+        let is_edit_resend = app.status_message == "Submitting..."
+            && (app.modal == ActiveModal::EditResend || app.detail_editing);
+        if is_edit_resend {
+            let was_inline = app.detail_editing;
             if let Some(dp) = app.data_plane.as_ref() {
                 if let Some((path, _)) = app.selected_entity() {
                     let dp = dp.clone();
@@ -657,47 +704,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                 let _ = tx.send(BgEvent::ResendSendComplete {
                                     status,
                                     dlq_seq_removed: seq_removed,
-                                    was_inline: false,
-                                });
-                            }
-                            Err(e) => {
-                                let _ = tx.send(BgEvent::Failed(format!("Resend failed: {}", e)));
-                            }
-                        }
-                    });
-                }
-            }
-        }
-
-        // Submit inline WYSIWYG edit & resend (spawned)
-        if app.status_message == "Submitting..." && app.detail_editing {
-            if let Some(dp) = app.data_plane.as_ref() {
-                if let Some((path, _)) = app.selected_entity() {
-                    let dp = dp.clone();
-                    let base_path = send_path(path).to_string();
-                    let entity_path = path.to_string();
-                    let msg = app.build_message_from_form();
-                    let dlq_seq = app.edit_source_dlq_seq.take();
-                    let tx = app.bg_tx.clone();
-
-                    app.set_status("Resending...");
-
-                    tokio::spawn(async move {
-                        match dp.send_message(&base_path, &msg).await {
-                            Ok(_) => {
-                                let (status, seq_removed) = if let Some(seq) = dlq_seq {
-                                    match dp.remove_from_dlq(&entity_path, seq).await {
-                                        Ok(true) => ("Resent and removed from DLQ".to_string(), Some(seq)),
-                                        Ok(false) => ("Resent (DLQ message not found to remove)".to_string(), None),
-                                        Err(e) => (format!("Resent, but DLQ cleanup failed: {}", e), None),
-                                    }
-                                } else {
-                                    ("Message resent successfully".to_string(), None)
-                                };
-                                let _ = tx.send(BgEvent::ResendSendComplete {
-                                    status,
-                                    dlq_seq_removed: seq_removed,
-                                    was_inline: true,
+                                    was_inline,
                                 });
                             }
                             Err(e) => {
@@ -784,99 +791,36 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
         // Bulk resend from DLQ (messages panel R key)
         if app.status_message == "Bulk resending..." && app.data_plane.is_some() && !app.bg_running {
             if let ActiveModal::ConfirmBulkResend { ref entity_path, count, is_topic } = app.modal {
+                let entity_path = entity_path.clone();
                 let dp = app.data_plane.clone().unwrap();
-                let path = entity_path.clone();
                 let max_count = count;
                 let tx = app.bg_tx.clone();
                 let cancel = app.new_cancel_token();
                 let mgmt = app.management.as_ref().cloned();
+                let send_target = send_path_owned(&entity_path);
 
                 app.bg_running = true;
                 app.modal = ActiveModal::None;
                 app.set_status(format!("Resending up to {} messages from DLQ (Esc to cancel)...", max_count));
 
                 tokio::spawn(async move {
-                    // Build (dlq_path, send_target) pairs
-                    let pairs: Vec<(String, String)> = if is_topic {
-                        if let Some(mgmt) = mgmt {
-                            match mgmt.list_subscriptions(&path).await {
-                                Ok(subs) => subs.iter().map(|s| {
-                                    let dlq = format!("{}/subscriptions/{}/$deadletterqueue", path, s.name);
-                                    (dlq, path.clone())
-                                }).collect(),
-                                Err(e) => {
-                                    let _ = tx.send(BgEvent::Failed(format!("Failed to list subscriptions: {}", e)));
-                                    return;
-                                }
-                            }
-                        } else {
-                            return;
-                        }
-                    } else {
-                        let send_target = send_path_owned(&path);
-                        let dlq = format!("{}/$deadletterqueue", path);
-                        vec![(dlq, send_target)]
+                    let pairs = match resolve_resend_pairs(mgmt.as_ref(), &entity_path, &send_target, is_topic).await {
+                        Ok(p) => p,
+                        Err(e) => { let _ = tx.send(BgEvent::Failed(e)); return; }
                     };
 
-                    let mut resent = 0u32;
-                    let mut errors = 0u32;
-
-                    for (dlq_path, send_target) in &pairs {
-                        for _ in 0..max_count {
+                    match resend_dlq_loop(&dp, &pairs, Some(max_count), &cancel, &tx).await {
+                        Ok((resent, errors)) => {
+                            let _ = tx.send(BgEvent::ResendComplete { resent, errors });
+                        }
+                        Err(msg) => {
                             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                                let _ = tx.send(BgEvent::Cancelled {
-                                    message: format!("Cancelled after resending {} messages ({} errors)", resent, errors),
-                                });
-                                return;
-                            }
-
-                            let locked = match dp.peek_lock(dlq_path, 1).await {
-                                Ok(Some(msg)) => msg,
-                                Ok(None) => break,
-                                Err(e) => {
-                                    let _ = tx.send(BgEvent::Failed(format!("Bulk resend failed after {}: {}", resent, e)));
-                                    return;
-                                }
-                            };
-
-                            let lock_uri = match locked.lock_token_uri {
-                                Some(ref uri) => uri.clone(),
-                                None => { errors += 1; continue; }
-                            };
-
-                            let resend_msg = crate::client::models::ServiceBusMessage {
-                                body: locked.body.clone(),
-                                content_type: locked.broker_properties.content_type.clone(),
-                                message_id: locked.broker_properties.message_id.clone(),
-                                correlation_id: locked.broker_properties.correlation_id.clone(),
-                                session_id: locked.broker_properties.session_id.clone(),
-                                label: locked.broker_properties.label.clone(),
-                                custom_properties: locked.custom_properties.clone(),
-                                ..Default::default()
-                            };
-
-                            match dp.send_message(send_target, &resend_msg).await {
-                                Ok(_) => {
-                                    if dp.complete_message(&lock_uri).await.is_ok() {
-                                        resent += 1;
-                                    } else {
-                                        errors += 1;
-                                    }
-                                }
-                                Err(_) => {
-                                    let _ = dp.abandon_message(&lock_uri).await;
-                                    errors += 1;
-                                }
-                            }
-
-                            if (resent + errors) % 50 == 0 {
-                                let _ = tx.send(BgEvent::Progress(
-                                    format!("Resent {} messages ({} errors)... (Esc to cancel)", resent, errors),
-                                ));
+                                let _ = tx.send(BgEvent::Cancelled { message: msg });
+                            } else {
+                                let _ = tx.send(BgEvent::Failed(msg));
                             }
                         }
                     }
-                    let _ = tx.send(BgEvent::ResendComplete { resent, errors });
                 });
             }
         }
@@ -896,32 +840,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 app.set_status("Purging messages...");
 
                 tokio::spawn(async move {
-                    // Build list of paths to delete from
-                    let paths: Vec<String> = if is_topic {
-                        if let Some(mgmt) = mgmt {
-                            match mgmt.list_subscriptions(&path).await {
-                                Ok(subs) => subs.iter().map(|s| {
-                                    let sub_path = format!("{}/subscriptions/{}", path, s.name);
-                                    if was_dlq {
-                                        format!("{}/$deadletterqueue", sub_path)
-                                    } else {
-                                        sub_path
-                                    }
-                                }).collect(),
-                                Err(e) => {
-                                    let _ = tx.send(BgEvent::Failed(format!("Failed to list subscriptions: {}", e)));
-                                    return;
-                                }
-                            }
-                        } else {
-                            return;
-                        }
-                    } else {
-                        if was_dlq {
-                            vec![format!("{}/$deadletterqueue", path)]
-                        } else {
-                            vec![path.clone()]
-                        }
+                    let paths = match resolve_purge_paths(mgmt.as_ref(), &path, is_topic, was_dlq).await {
+                        Ok(p) => p,
+                        Err(e) => { let _ = tx.send(BgEvent::Failed(e)); return; }
                     };
 
                     let mut deleted = 0u64;
