@@ -186,3 +186,8 @@ src/
 ## License
 
 [MIT](LICENSE)
+
+
+## Disclaimer
+
+This application has been developed using coding agents. Use at own risk.
