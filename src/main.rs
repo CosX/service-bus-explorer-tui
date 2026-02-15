@@ -475,13 +475,19 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             match mgmt.list_subscriptions(&entity_path).await {
                                 Ok(subs) => {
                                     for s in &subs {
+                                        // Management-style path for remove_from_dlq
+                                        let sub_entity =
+                                            format!("{}/Subscriptions/{}", entity_path, s.name);
                                         let dlq_path = format!(
                                             "{}/subscriptions/{}/$deadletterqueue",
                                             entity_path, s.name
                                         );
-                                        if let Ok(msgs) =
+                                        if let Ok(mut msgs) =
                                             dp.peek_messages(&dlq_path, peek_count).await
                                         {
+                                            for msg in &mut msgs {
+                                                msg.source_entity = Some(sub_entity.clone());
+                                            }
                                             all_msgs.extend(msgs);
                                         }
                                     }
@@ -501,6 +507,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                         });
                     });
                 } else {
+                    let source_entity = entity_path.clone();
                     let peek_path = if is_dlq {
                         format!("{}/$deadletterqueue", entity_path)
                     } else {
@@ -509,7 +516,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
 
                     tokio::spawn(async move {
                         match dp.peek_messages(&peek_path, peek_count).await {
-                            Ok(msgs) => {
+                            Ok(mut msgs) => {
+                                for msg in &mut msgs {
+                                    msg.source_entity = Some(source_entity.clone());
+                                }
                                 let _ = tx.send(BgEvent::PeekComplete {
                                     messages: msgs,
                                     is_dlq,
@@ -878,58 +888,66 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
             }
         }
 
-        // Bulk resend from DLQ (messages panel R key)
+        // Bulk resend peeked DLQ messages (messages panel R key)
         if app.status_message == "Bulk resending..." && app.data_plane.is_some() && !app.bg_running
         {
             if let ActiveModal::ConfirmBulkResend {
-                ref entity_path,
-                count,
-                is_topic,
+                ref entity_path, ..
             } = app.modal
             {
                 let entity_path = entity_path.clone();
                 let dp = app.data_plane.clone().unwrap();
-                let max_count = count;
                 let tx = app.bg_tx.clone();
                 let cancel = app.new_cancel_token();
-                let mgmt = app.management.as_ref().cloned();
                 let send_target = send_path_owned(&entity_path);
+                let messages = app.dlq_messages.clone();
 
                 app.bg_running = true;
                 app.modal = ActiveModal::None;
                 app.set_status(format!(
-                    "Resending up to {} messages from DLQ (Esc to cancel)...",
-                    max_count
+                    "Resending {} peeked DLQ messages (Esc to cancel)...",
+                    messages.len()
                 ));
 
                 tokio::spawn(async move {
-                    let pairs = match resolve_resend_pairs(
-                        mgmt.as_ref(),
-                        &entity_path,
-                        &send_target,
-                        is_topic,
-                    )
-                    .await
-                    {
-                        Ok(p) => p,
-                        Err(e) => {
-                            let _ = tx.send(BgEvent::Failed(e));
+                    let mut resent = 0u32;
+                    let mut errors = 0u32;
+                    let total = messages.len();
+
+                    for msg in &messages {
+                        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                            let _ = tx.send(BgEvent::Cancelled {
+                                message: format!(
+                                    "Cancelled after resending {} of {} messages ({} errors)",
+                                    resent, total, errors
+                                ),
+                            });
                             return;
                         }
-                    };
 
-                    match resend_dlq_loop(&dp, &pairs, Some(max_count), &cancel, &tx).await {
-                        Ok((resent, errors)) => {
-                            let _ = tx.send(BgEvent::ResendComplete { resent, errors });
-                        }
-                        Err(msg) => {
-                            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                                let _ = tx.send(BgEvent::Cancelled { message: msg });
-                            } else {
-                                let _ = tx.send(BgEvent::Failed(msg));
+                        match dp.send_message(&send_target, &msg.to_sendable()).await {
+                            Ok(_) => {
+                                // Remove original from DLQ by sequence number
+                                let source = msg.source_entity.as_deref().unwrap_or(&entity_path);
+                                if let Some(seq) = msg.broker_properties.sequence_number {
+                                    let _ = dp.remove_from_dlq(source, seq).await;
+                                }
+                                resent += 1;
+                            }
+                            Err(_) => {
+                                errors += 1;
                             }
                         }
+
+                        if (resent + errors) > 1 && (resent + errors).is_multiple_of(10) {
+                            let _ = tx.send(BgEvent::Progress(format!(
+                                "Resent {}/{} messages ({} errors)... (Esc to cancel)",
+                                resent, total, errors
+                            )));
+                        }
                     }
+
+                    let _ = tx.send(BgEvent::ResendComplete { resent, errors });
                 });
             }
         }

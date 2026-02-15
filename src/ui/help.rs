@@ -57,7 +57,7 @@ pub fn render_help(frame: &mut Frame) {
             "  Bulk Operations (Messages panel)",
             Style::default().fg(Color::Cyan).bold(),
         )]),
-        Line::from("  R (shift)      Resend DLQ → main entity"),
+        Line::from("  R (shift)      Resend peeked DLQ → main entity"),
         Line::from("  D (shift)      Bulk delete messages"),
         Line::from(Span::styled(
             "                 (on topics: fan-out across all subs)",

@@ -166,6 +166,11 @@ pub struct ReceivedMessage {
     pub custom_properties: Vec<(String, String)>,
     /// The lock token URI for peek-locked messages (used for complete/abandon/deadletter).
     pub lock_token_uri: Option<String>,
+    /// The entity path this message was peeked from (without `/$deadletterqueue`).
+    /// Populated during peek so bulk-resend knows which DLQ to remove from,
+    /// especially for topic fan-out where messages come from multiple subscription DLQs.
+    #[serde(skip)]
+    pub source_entity: Option<String>,
 }
 
 impl ReceivedMessage {

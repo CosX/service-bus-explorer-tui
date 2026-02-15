@@ -462,5 +462,6 @@ async fn parse_received_message(resp: reqwest::Response) -> Result<ReceivedMessa
         broker_properties,
         custom_properties: custom_props,
         lock_token_uri: None,
+        source_entity: None,
     })
 }

@@ -128,8 +128,22 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     // Persist scroll offset across frames for natural scrolling
     app.message_table_state.select(Some(app.message_selected));
 
+    // Layout: table + hint bar
+    let msg_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(inner);
+
+    let hint_text = if app.message_tab == MessageTab::DeadLetter {
+        "R=Resend All  D=Delete All  Enter=View  e=Edit & Resend"
+    } else {
+        "D=Delete All  Enter=View  e=Edit & Resend"
+    };
+    let hint = Paragraph::new(hint_text).style(Style::default().fg(Color::DarkGray));
+
     frame.render_widget(block, area);
-    frame.render_stateful_widget(table, inner, &mut app.message_table_state);
+    frame.render_stateful_widget(table, msg_layout[0], &mut app.message_table_state);
+    frame.render_widget(hint, msg_layout[1]);
 }
 
 fn render_detail_readonly(frame: &mut Frame, app: &mut App, inner: Rect) {

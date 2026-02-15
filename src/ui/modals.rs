@@ -65,9 +65,9 @@ pub fn render_modal(frame: &mut Frame, app: &App) {
         } => {
             render_confirm_bulk(
                 frame,
-                "Bulk Resend from DLQ",
+                "Resend Peeked DLQ Messages",
                 &format!(
-                    "Resend up to {} dead-letter messages back to '{}'?",
+                    "Resend {} peeked dead-letter messages back to '{}'?\nOriginals will be removed from DLQ.",
                     count, entity_path
                 ),
                 Color::Yellow,
