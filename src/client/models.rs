@@ -292,6 +292,25 @@ impl TreeNode {
         }
     }
 
+    /// Collect the IDs of all expanded nodes in this tree.
+    pub fn collect_expanded_ids(&self, out: &mut std::collections::HashSet<String>) {
+        if self.expanded {
+            out.insert(self.id.clone());
+        }
+        for child in &self.children {
+            child.collect_expanded_ids(out);
+        }
+    }
+
+    /// Apply a previously captured set of expanded IDs to this tree.
+    /// Nodes whose ID appears in `expanded_ids` are expanded; all others are collapsed.
+    pub fn apply_expanded_ids(&mut self, expanded_ids: &std::collections::HashSet<String>) {
+        self.expanded = expanded_ids.contains(&self.id);
+        for child in &mut self.children {
+            child.apply_expanded_ids(expanded_ids);
+        }
+    }
+
     /// Flatten this tree into a displayable list of visible nodes.
     pub fn flatten(&self) -> Vec<FlatNode> {
         let mut result = Vec::new();

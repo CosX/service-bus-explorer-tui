@@ -264,7 +264,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.bg_running = false;
                     app.loading = false;
                 }
-                BgEvent::TreeRefreshed { tree, flat_nodes } => {
+                BgEvent::TreeRefreshed { mut tree, flat_nodes } => {
                     let q_count = flat_nodes
                         .iter()
                         .filter(|n| n.entity_type == EntityType::Queue)
@@ -273,11 +273,32 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                         .iter()
                         .filter(|n| n.entity_type == EntityType::Topic)
                         .count();
-                    app.flat_nodes = flat_nodes;
+
+                    // Preserve expand/collapse state and selection across refreshes
+                    let prev_selected_id = app.flat_nodes
+                        .get(app.tree_selected)
+                        .map(|n| n.id.clone());
+
+                    if let Some(ref old_tree) = app.tree {
+                        let mut expanded_ids = std::collections::HashSet::new();
+                        old_tree.collect_expanded_ids(&mut expanded_ids);
+                        tree.apply_expanded_ids(&expanded_ids);
+                    }
+
+                    app.flat_nodes = tree.flatten();
                     app.tree = Some(tree);
-                    if app.tree_selected >= app.flat_nodes.len() {
+
+                    // Restore selection by node ID, fall back to clamping
+                    if let Some(ref prev_id) = prev_selected_id {
+                        if let Some(pos) = app.flat_nodes.iter().position(|n| n.id == *prev_id) {
+                            app.tree_selected = pos;
+                        } else if app.tree_selected >= app.flat_nodes.len() {
+                            app.tree_selected = app.flat_nodes.len().saturating_sub(1);
+                        }
+                    } else if app.tree_selected >= app.flat_nodes.len() {
                         app.tree_selected = 0;
                     }
+
                     app.loading = false;
                     app.set_status(format!("Loaded {} queues, {} topics", q_count, t_count));
                 }

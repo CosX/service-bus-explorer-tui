@@ -5,7 +5,7 @@ use ratatui::Frame;
 use crate::app::{App, FocusPanel};
 use crate::client::models::EntityType;
 
-pub fn render_tree(frame: &mut Frame, app: &App, area: Rect) {
+pub fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_focused = app.focus == FocusPanel::Tree;
     let border_style = if is_focused {
         Style::default().fg(Color::Cyan)
@@ -92,10 +92,9 @@ pub fn render_tree(frame: &mut Frame, app: &App, area: Rect) {
         .block(Block::default())
         .highlight_style(Style::default());
 
-    // Use a stateful list for scrolling
-    let mut state = ListState::default();
-    state.select(Some(app.tree_selected));
+    // Persist scroll offset across frames for natural scrolling
+    app.tree_list_state.select(Some(app.tree_selected));
 
     frame.render_widget(block, area);
-    frame.render_stateful_widget(list, inner, &mut state);
+    frame.render_stateful_widget(list, inner, &mut app.tree_list_state);
 }

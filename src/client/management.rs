@@ -724,22 +724,45 @@ fn parse_optional_bool(xml: &str, tag: &str) -> Option<bool> {
     extract_element_value(xml, tag).and_then(|v| v.parse().ok())
 }
 
+/// Extract an element's text value by local name, ignoring any XML namespace prefix.
+///
+/// Azure's WCF serializer assigns auto-generated namespace prefixes (`d2p1:`, `d3p1:`, etc.)
+/// that vary depending on element nesting depth. This function finds the element regardless
+/// of which prefix is used, falling back to an unprefixed match.
+fn extract_value_any_ns(xml: &str, local_name: &str) -> Option<String> {
+    // Try unprefixed first (cheapest check)
+    if let Some(v) = extract_element_value(xml, local_name) {
+        return Some(v);
+    }
+    // Search for ":LocalName>" — any namespace prefix
+    let suffix = format!(":{}>" , local_name);
+    if let Some(suffix_pos) = xml.find(&suffix) {
+        // Walk backward to find the '<' that opens this tag
+        let before = &xml[..suffix_pos];
+        if let Some(lt_pos) = before.rfind('<') {
+            let full_tag = &xml[lt_pos + 1..suffix_pos + suffix.len() - 1];
+            return extract_element_value(xml, full_tag);
+        }
+    }
+    None
+}
+
 fn parse_count_details(xml: &str) -> (i64, i64, i64, i64, i64) {
     let cd = extract_element(xml, "CountDetails").unwrap_or_default();
-    let active = parse_optional_i64(&cd, "d2p1:ActiveMessageCount")
-        .or_else(|| parse_optional_i64(&cd, "ActiveMessageCount"))
+    let active = extract_value_any_ns(&cd, "ActiveMessageCount")
+        .and_then(|v| v.parse().ok())
         .unwrap_or(0);
-    let dlq = parse_optional_i64(&cd, "d2p1:DeadLetterMessageCount")
-        .or_else(|| parse_optional_i64(&cd, "DeadLetterMessageCount"))
+    let dlq = extract_value_any_ns(&cd, "DeadLetterMessageCount")
+        .and_then(|v| v.parse().ok())
         .unwrap_or(0);
-    let scheduled = parse_optional_i64(&cd, "d2p1:ScheduledMessageCount")
-        .or_else(|| parse_optional_i64(&cd, "ScheduledMessageCount"))
+    let scheduled = extract_value_any_ns(&cd, "ScheduledMessageCount")
+        .and_then(|v| v.parse().ok())
         .unwrap_or(0);
-    let transfer = parse_optional_i64(&cd, "d2p1:TransferMessageCount")
-        .or_else(|| parse_optional_i64(&cd, "TransferMessageCount"))
+    let transfer = extract_value_any_ns(&cd, "TransferMessageCount")
+        .and_then(|v| v.parse().ok())
         .unwrap_or(0);
-    let transfer_dlq = parse_optional_i64(&cd, "d2p1:TransferDeadLetterMessageCount")
-        .or_else(|| parse_optional_i64(&cd, "TransferDeadLetterMessageCount"))
+    let transfer_dlq = extract_value_any_ns(&cd, "TransferDeadLetterMessageCount")
+        .and_then(|v| v.parse().ok())
         .unwrap_or(0);
     (active, dlq, scheduled, transfer, transfer_dlq)
 }

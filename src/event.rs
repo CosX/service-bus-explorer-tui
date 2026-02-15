@@ -278,12 +278,17 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
 
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
-            if app.message_selected > 0 {
+            // Scroll body when viewing message detail, else navigate list
+            if app.selected_message_detail.is_some() {
+                app.detail_body_scroll = app.detail_body_scroll.saturating_sub(1);
+            } else if app.message_selected > 0 {
                 app.message_selected -= 1;
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if app.message_selected + 1 < len {
+            if app.selected_message_detail.is_some() {
+                app.detail_body_scroll = app.detail_body_scroll.saturating_add(1);
+            } else if app.message_selected + 1 < len {
                 app.message_selected += 1;
             }
         }
@@ -295,6 +300,7 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
             };
             if let Some(msg) = msgs.get(app.message_selected) {
                 app.selected_message_detail = Some(msg.clone());
+                app.detail_body_scroll = 0;
             }
         }
         KeyCode::Char('1') => {
@@ -384,6 +390,7 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Esc => {
             app.selected_message_detail = None;
+            app.detail_body_scroll = 0;
         }
         _ => {}
     }

@@ -58,7 +58,7 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     if messages.is_empty() {
-        let msg = Paragraph::new("No messages. Press 'p' on an entity to peek.")
+        let msg = Paragraph::new("No messages. Press 'p' on an entity to peek active messages or press 'd' to peek dead-letter messages.")
             .style(Style::default().fg(Color::DarkGray))
             .block(block);
         frame.render_widget(msg, area);
@@ -125,14 +125,14 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     .block(Block::default())
     .column_spacing(1);
 
-    let mut state = TableState::default();
-    state.select(Some(app.message_selected));
+    // Persist scroll offset across frames for natural scrolling
+    app.message_table_state.select(Some(app.message_selected));
 
     frame.render_widget(block, area);
-    frame.render_stateful_widget(table, inner, &mut state);
+    frame.render_stateful_widget(table, inner, &mut app.message_table_state);
 }
 
-fn render_detail_readonly(frame: &mut Frame, app: &App, inner: Rect) {
+fn render_detail_readonly(frame: &mut Frame, app: &mut App, inner: Rect) {
     let msg = app.selected_message_detail.as_ref().unwrap();
 
     let san = |s: &str| sanitize_for_terminal(s, false);
@@ -196,14 +196,22 @@ fn render_detail_readonly(frame: &mut Frame, app: &App, inner: Rect) {
     frame.render_widget(props_table, detail_layout[0]);
 
     let body = san_ml(&pretty_print_body(&msg.body));
+    let body_lines = body.lines().count() as u16;
+    let body_inner = Block::default()
+        .title(" Body (j/k to scroll · Esc = close) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    let body_viewport = body_inner.inner(detail_layout[1]).height;
+    // Clamp scroll so we don't scroll past the end
+    if body_lines > body_viewport {
+        app.detail_body_scroll = app.detail_body_scroll.min(body_lines.saturating_sub(body_viewport));
+    } else {
+        app.detail_body_scroll = 0;
+    }
     let body_widget = Paragraph::new(body)
-        .block(
-            Block::default()
-                .title(" Body ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow)),
-        )
-        .wrap(Wrap { trim: false });
+        .block(body_inner)
+        .wrap(Wrap { trim: false })
+        .scroll((app.detail_body_scroll, 0));
     frame.render_widget(body_widget, detail_layout[1]);
 }
 

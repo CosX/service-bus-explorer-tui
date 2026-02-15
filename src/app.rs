@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use ratatui::widgets::{ListState, TableState};
 use tokio::sync::mpsc;
 
 use crate::client::models::*;
@@ -148,6 +149,12 @@ pub struct App {
 
     // Loading indicator
     pub loading: bool,
+
+    // Persistent scroll state for stateful widgets
+    pub tree_list_state: ListState,
+    pub message_table_state: TableState,
+    /// Scroll offset for the read-only message body detail view.
+    pub detail_body_scroll: u16,
 }
 
 impl App {
@@ -190,6 +197,9 @@ impl App {
             bg_running: false,
             bg_cancel: Arc::new(AtomicBool::new(false)),
             loading: false,
+            tree_list_state: ListState::default(),
+            message_table_state: TableState::default(),
+            detail_body_scroll: 0,
         }
     }
 
