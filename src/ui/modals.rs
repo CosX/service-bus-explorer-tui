@@ -343,9 +343,9 @@ fn render_form_with_body(
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Min(8),                    // body area (bordered)
-            Constraint::Length(props_height),       // property fields
-            Constraint::Length(1),                  // hint line
+            Constraint::Min(8),               // body area (bordered)
+            Constraint::Length(props_height), // property fields
+            Constraint::Length(1),            // hint line
         ])
         .split(inner);
 
