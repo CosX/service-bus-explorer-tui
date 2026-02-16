@@ -150,6 +150,7 @@ jobs:
 
       - name: Generate formula
         run: |
+          mkdir -p tap/Formula
           cat > tap/Formula/service-bus-explorer-tui.rb << 'EOF'
           class ServiceBusExplorerTui < Formula
             desc "Cross-platform TUI for managing Azure Service Bus"
