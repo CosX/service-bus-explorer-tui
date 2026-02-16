@@ -4,6 +4,8 @@ use ratatui::Frame;
 
 use crate::app::{ActiveModal, App};
 
+use super::sanitize::sanitize_for_terminal;
+
 fn mask_secret_ascii_keep_suffix(input: &str, suffix_chars: usize) -> String {
     if input.is_empty() {
         return String::new();
@@ -46,8 +48,8 @@ fn redact_connection_string_for_preview(conn_str: &str) -> String {
     }
 }
 
-pub fn render_modal(frame: &mut Frame, app: &App) {
-    match &app.modal {
+pub fn render_modal(frame: &mut Frame, app: &mut App) {
+    match &app.modal.clone() {
         ActiveModal::ConnectionModeSelect => render_connection_mode_select(frame),
         ActiveModal::ConnectionInput => render_connection_input(frame, app),
         ActiveModal::ConnectionList => render_connection_list(frame, app),
@@ -295,7 +297,170 @@ fn render_azure_ad_input(frame: &mut Frame, app: &App) {
     frame.set_cursor_position((cursor_x, cursor_y));
 }
 
-fn render_form(frame: &mut Frame, app: &App, title: &str, hint: &str) {
+fn render_form(frame: &mut Frame, app: &mut App, title: &str, hint: &str) {
+    let san_ml = |s: &str| sanitize_for_terminal(s, true);
+
+    // Check if the first field is a Body field (SendMessage / EditResend forms).
+    let has_body = app
+        .input_fields
+        .first()
+        .map(|(l, _)| l == "Body")
+        .unwrap_or(false);
+
+    if has_body {
+        render_form_with_body(frame, app, title, hint, &san_ml);
+    } else {
+        render_form_flat(frame, app, title, hint);
+    }
+}
+
+/// Form layout for Send/EditResend: multiline body area + single-line property fields.
+fn render_form_with_body(
+    frame: &mut Frame,
+    app: &mut App,
+    title: &str,
+    hint: &str,
+    san_ml: &dyn Fn(&str) -> String,
+) {
+    // Properties = fields 1..N, each needs 2 rows (label + value).
+    let prop_count = app.input_fields.len().saturating_sub(1);
+    let props_height = (prop_count as u16) * 2;
+    // body area (bordered, min 8) + properties + hint + outer block borders (2) + margin (2)
+    let min_height = 10 + props_height + 1 + 2 + 2;
+    // Use 80% of terminal height, but at least min_height
+    let desired = (frame.area().height * 80 / 100).max(min_height);
+    let area = centered_rect_abs_height(70, desired, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(format!(" {} ", title))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let form_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([
+            Constraint::Min(8),                    // body area (bordered)
+            Constraint::Length(props_height),       // property fields
+            Constraint::Length(1),                  // hint line
+        ])
+        .split(inner);
+
+    let body_area = form_layout[0];
+    let props_area = form_layout[1];
+    let hint_area = form_layout[2];
+
+    // ── Body field (index 0) ──
+    let body_is_active = app.input_field_index == 0;
+    let body_border_style = if body_is_active {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::Yellow)
+    };
+    let body_block = Block::default()
+        .title(if body_is_active {
+            " Body (editing) "
+        } else {
+            " Body "
+        })
+        .borders(Borders::ALL)
+        .border_style(body_border_style);
+    let body_inner = body_block.inner(body_area);
+    frame.render_widget(body_block, body_area);
+
+    if let Some((_, ref body_val)) = app.input_fields.first() {
+        let display_body = if body_is_active {
+            let cursor = app.form_cursor.min(body_val.len());
+            let (before, after) = body_val.split_at(cursor);
+            san_ml(&format!("{}▏{}", before, after))
+        } else if body_val.is_empty() {
+            String::new()
+        } else {
+            san_ml(&pretty_print_body(body_val))
+        };
+        let body_widget = Paragraph::new(display_body)
+            .style(Style::default().fg(Color::White))
+            .wrap(Wrap { trim: false });
+
+        if body_is_active {
+            let cursor_pos = app.form_cursor.min(body_val.len());
+            let cursor_line = body_val[..cursor_pos].matches('\n').count() as u16;
+            let visible = body_inner.height.saturating_sub(1);
+            if cursor_line < app.body_scroll {
+                app.body_scroll = cursor_line;
+            } else if cursor_line >= app.body_scroll + visible.max(1) {
+                app.body_scroll = cursor_line.saturating_sub(visible.saturating_sub(1));
+            }
+            frame.render_widget(body_widget.scroll((app.body_scroll, 0)), body_inner);
+        } else {
+            app.body_scroll = 0;
+            frame.render_widget(body_widget, body_inner);
+        }
+    }
+
+    // ── Property fields (1..N) ──
+    let prop_constraints: Vec<Constraint> = (1..app.input_fields.len())
+        .flat_map(|_| vec![Constraint::Length(1), Constraint::Length(1)])
+        .collect();
+    let prop_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(prop_constraints)
+        .split(props_area);
+
+    for field_idx in 1..app.input_fields.len() {
+        let (ref label, ref value) = app.input_fields[field_idx];
+        let row = (field_idx - 1) * 2;
+        let label_row = row;
+        let value_row = row + 1;
+
+        if label_row >= prop_layout.len() || value_row >= prop_layout.len() {
+            break;
+        }
+
+        let is_active = field_idx == app.input_field_index;
+
+        let label_style = if is_active {
+            Style::default().fg(Color::Cyan).bold()
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        frame.render_widget(
+            Paragraph::new(format!("{}:", label)).style(label_style),
+            prop_layout[label_row],
+        );
+
+        let val_style = if is_active {
+            Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let display_val = if is_active {
+            let cursor = app.form_cursor.min(value.len());
+            let (before, after) = value.split_at(cursor);
+            format!("{}▏{}", before, after)
+        } else {
+            value.clone()
+        };
+        frame.render_widget(
+            Paragraph::new(display_val).style(val_style),
+            prop_layout[value_row],
+        );
+    }
+
+    // ── Hint line ──
+    let hint_widget = Paragraph::new(format!(
+        "Tab fields · ↑↓←→ navigate · Enter newline (body) · {} · Esc cancel",
+        hint
+    ))
+    .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(hint_widget, hint_area);
+}
+
+/// Flat form layout for Create* modals (no body field).
+fn render_form_flat(frame: &mut Frame, app: &App, title: &str, hint: &str) {
     let field_count = app.input_fields.len();
     // Each field needs 2 rows (label + value), plus hint line, block borders (2), layout margin (2)
     let rows_needed = (field_count as u16) * 2 + 1 + 2 + 2;
@@ -350,7 +515,6 @@ fn render_form(frame: &mut Frame, app: &App, title: &str, hint: &str) {
         };
 
         let display_val = if is_active {
-            // Show cursor at the correct position within the value
             let cursor = app.form_cursor.min(value.len());
             let (before, after) = value.split_at(cursor);
             format!("{}▏{}", before, after)
@@ -371,6 +535,14 @@ fn render_form(frame: &mut Frame, app: &App, title: &str, hint: &str) {
         ))
         .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(hint_widget, layout[hint_idx]);
+    }
+}
+
+fn pretty_print_body(body: &str) -> String {
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+        serde_json::to_string_pretty(&val).unwrap_or_else(|_| body.to_string())
+    } else {
+        body.to_string()
     }
 }
 
