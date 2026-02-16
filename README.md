@@ -31,10 +31,10 @@ The fastest way to install on macOS or Linux using Homebrew:
 
 ```bash
 # Add the tap (first time only)
-brew tap OWNER/tap
+brew tap CosX/tap
 
 # Install
-brew install OWNER/tap/service-bus-explorer-tui
+brew install CosX/tap/service-bus-explorer-tui
 ```
 
 The `brew tap` command adds a third-party repository to Homebrew. After tapping, you can install and update the tool like any other Homebrew package.
@@ -94,7 +94,7 @@ Clone and build manually:
 
 ```bash
 # Clone the repository
-git clone https://github.com/OWNER/service-bus-explorer-tui.git
+git clone https://github.com/CosX/service-bus-explorer-tui.git
 cd service-bus-explorer-tui
 
 # Debug build
