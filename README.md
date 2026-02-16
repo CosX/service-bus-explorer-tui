@@ -23,36 +23,107 @@ Built with Rust, [ratatui](https://ratatui.rs), and the Azure Service Bus REST A
 - Vim-style keybindings
 - Terminal escape injection protection for untrusted message content
 
-## Prerequisites
+## Installation
 
-- **Rust 1.70+** — install via [rustup](https://rustup.rs):
-  ```
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-  ```
-- **An Azure Service Bus namespace** with either:
-  - A SAS connection string, or
-  - Azure AD credentials (via environment, CLI, managed identity, etc.)
+### Homebrew (macOS/Linux)
 
-## Build
+The fastest way to install on macOS or Linux using Homebrew:
 
 ```bash
-# Clone the repo
-git clone https://github.com/your-org/service-bus-explorer-tui.git
+# Add the tap (first time only)
+brew tap OWNER/tap
+
+# Install
+brew install OWNER/tap/service-bus-explorer-tui
+```
+
+The `brew tap` command adds a third-party repository to Homebrew. After tapping, you can install and update the tool like any other Homebrew package.
+
+### cargo-binstall
+
+Fast installation of pre-built binaries via `cargo-binstall`:
+
+```bash
+cargo binstall service-bus-explorer-tui
+```
+
+[cargo-binstall](https://github.com/cargo-bins/cargo-binstall) downloads pre-compiled binaries instead of building from source, saving significant time. Install `cargo-binstall` first if you don't have it:
+
+```bash
+cargo install cargo-binstall
+```
+
+### cargo install
+
+Install from source via [crates.io](https://crates.io):
+
+```bash
+cargo install service-bus-explorer-tui
+```
+
+This compiles from source and installs to `~/.cargo/bin/` (ensure it's in your `PATH`). Requires Rust 1.70+.
+
+### Pre-built binaries
+
+Download pre-built binaries directly from the [GitHub Releases](https://github.com/OWNER/service-bus-explorer-tui/releases) page.
+
+Available platforms:
+
+| Platform              | Artifact                                              |
+|-----------------------|-------------------------------------------------------|
+| **Linux (x86_64)**    | `service-bus-explorer-tui-x86_64-unknown-linux-gnu`   |
+| **Linux (ARM64)**     | `service-bus-explorer-tui-aarch64-unknown-linux-gnu`  |
+| **macOS (Intel)**     | `service-bus-explorer-tui-x86_64-apple-darwin`        |
+| **macOS (Apple Silicon)** | `service-bus-explorer-tui-aarch64-apple-darwin`   |
+| **Windows (x86_64)**  | `service-bus-explorer-tui-x86_64-pc-windows-msvc.exe` |
+
+**Extract and install:**
+
+```bash
+# Linux/macOS
+tar xzf service-bus-explorer-tui-*.tar.gz
+chmod +x service-bus-explorer-tui
+sudo mv service-bus-explorer-tui /usr/local/bin/
+
+# Windows: move the .exe to a directory in your PATH
+```
+
+### Build from source
+
+Clone and build manually:
+
+```bash
+# Clone the repository
+git clone https://github.com/OWNER/service-bus-explorer-tui.git
 cd service-bus-explorer-tui
 
 # Debug build
 cargo build
 
-# Release build (optimised, stripped)
+# Release build (optimized, stripped)
 cargo build --release
 ```
 
 The release binary is at `target/release/service-bus-explorer-tui`.
 
+**Requirements:** Rust 1.70+ — install via [rustup](https://rustup.rs):
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+## Prerequisites
+
+- **An Azure Service Bus namespace** with either:
+  - A SAS connection string, or
+  - Azure AD credentials (via environment, CLI, managed identity, etc.)
+
 ## Run
 
 ```bash
-# Run directly via cargo
+# If installed via package manager or cargo
+service-bus-explorer-tui
+
+# Or run directly from source
 cargo run
 
 # Or run the compiled binary

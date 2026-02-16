@@ -2,11 +2,21 @@
 name = "service-bus-explorer-tui"
 version = "0.1.0"
 edition = "2021"
+authors = ["Karl Solgård <karl@solgard.solutions>"]
 description = "A cross-platform TUI for managing Azure Service Bus"
 license = "MIT"
 readme = "README.md"
-keywords = ["azure", "service-bus", "tui", "terminal"]
-categories = ["command-line-utilities"]
+repository = "https://github.com/CosX/service-bus-explorer-tui"
+homepage = "https://github.com/CosX/service-bus-explorer-tui"
+documentation = "https://github.com/CosX/service-bus-explorer-tui"
+keywords = ["azure", "service-bus", "tui", "terminal", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [
+    "target/",
+    ".github/",
+    ".git/",
+    "*.sh",
+]
 
 [features]
 vendored-tls = ["dep:openssl-sys"]
@@ -60,3 +70,11 @@ uuid = { version = "1", features = ["v4"] }
 lto = true
 strip = true
 codegen-units = 1
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.{ archive-format }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
