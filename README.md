@@ -65,7 +65,7 @@ This compiles from source and installs to `~/.cargo/bin/` (ensure it's in your `
 
 ### Pre-built binaries
 
-Download pre-built binaries directly from the [GitHub Releases](https://github.com/OWNER/service-bus-explorer-tui/releases) page.
+Download pre-built binaries directly from the [GitHub Releases](https://github.com/CosX/service-bus-explorer-tui/releases) page.
 
 Available platforms:
 
