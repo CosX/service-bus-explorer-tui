@@ -1,6 +1,6 @@
 # Service Bus Explorer TUI
 
-A cross-platform terminal UI for managing Azure Service Bus namespaces — queues, topics, subscriptions, and messages.
+A cross-platform terminal UI for managing Azure Service Bus namespaces — queues, topics, subscriptions, and messages. Inspired by the wonderful [ServiceBusExplorer](https://github.com/paolosalvatori/ServiceBusExplorer) application and bringing its functionality cross-platform.
 
 Built with Rust, [ratatui](https://ratatui.rs), and the Azure Service Bus REST API (no SDK dependency).
 
