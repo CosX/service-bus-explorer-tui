@@ -68,7 +68,7 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
 
     // Build table rows
-    let header = Row::new(vec!["#", "Message ID", "Seq #", "Size", "Enqueued"])
+    let header = Row::new(vec!["#", "Message ID", "Seq #", "Subject", "Enqueued"])
         .style(Style::default().fg(Color::Yellow).bold())
         .bottom_margin(1);
 
@@ -95,10 +95,13 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     .sequence_number
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "-".to_string()),
-                msg.broker_properties
-                    .size
-                    .map(format_size)
-                    .unwrap_or_else(|| "-".to_string()),
+                sanitize_for_terminal(
+                    &msg.broker_properties
+                        .label
+                        .clone()
+                        .unwrap_or_else(|| "-".to_string()),
+                    false,
+                ),
                 sanitize_for_terminal(
                     &msg.broker_properties
                         .enqueued_time_utc
@@ -117,7 +120,7 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Length(4),
             Constraint::Percentage(30),
             Constraint::Length(10),
-            Constraint::Length(10),
+            Constraint::Percentage(20),
             Constraint::Percentage(30),
         ],
     )
@@ -420,15 +423,5 @@ fn pretty_print_body(body: &str) -> String {
         serde_json::to_string_pretty(&val).unwrap_or_else(|_| body.to_string())
     } else {
         body.to_string()
-    }
-}
-
-fn format_size(bytes: i64) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
