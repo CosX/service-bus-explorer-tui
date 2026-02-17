@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 use crate::client::models::*;
+use crate::client::resource_manager::{DiscoveredNamespace, DiscoveryResult};
 use crate::client::{ConnectionConfig, DataPlaneClient, ManagementClient};
 use crate::config::AppConfig;
 
@@ -51,6 +52,10 @@ pub enum BgEvent {
         dlq_seq_removed: Option<i64>,
         was_inline: bool,
     },
+    /// Namespace discovery completed.
+    NamespacesDiscovered { result: DiscoveryResult },
+    /// Namespace discovery failed.
+    DiscoveryFailed(String),
 }
 
 /// Which panel is currently focused.
@@ -69,6 +74,7 @@ pub enum ActiveModal {
     ConnectionInput,
     ConnectionList,
     AzureAdNamespaceInput,
+    NamespaceDiscovery { state: DiscoveryState },
     SendMessage,
     CreateQueue,
     CreateTopic,
@@ -93,6 +99,14 @@ pub enum ActiveModal {
         is_topic: bool,
     },
     Help,
+}
+
+/// State of the namespace discovery modal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiscoveryState {
+    Loading,
+    List,
+    Error(String),
 }
 
 /// What kind of entity detail is being shown.
@@ -160,6 +174,11 @@ pub struct App {
     pub pending_peek_count: Option<i32>,
     pub peek_dlq: bool,
 
+    // Namespace discovery state
+    pub discovered_namespaces: Vec<DiscoveredNamespace>,
+    pub discovery_warnings: Vec<String>,
+    pub namespace_list_state: usize,
+
     // Background task channel for long-running operations
     pub bg_tx: mpsc::UnboundedSender<BgEvent>,
     pub bg_rx: mpsc::UnboundedReceiver<BgEvent>,
@@ -211,6 +230,9 @@ impl App {
             body_scroll: 0,
             pending_peek_count: None,
             peek_dlq: false,
+            discovered_namespaces: Vec::new(),
+            discovery_warnings: Vec::new(),
+            namespace_list_state: 0,
             bg_tx,
             bg_rx,
             bg_running: false,
@@ -574,6 +596,17 @@ impl App {
             dead_lettering_on_message_expiration: get_str(6).and_then(|v| v.parse().ok()),
             ..Default::default()
         }
+    }
+
+    /// Start namespace discovery flow.
+    pub fn start_namespace_discovery(&mut self) {
+        self.discovered_namespaces.clear();
+        self.discovery_warnings.clear();
+        self.namespace_list_state = 0;
+        self.modal = ActiveModal::NamespaceDiscovery {
+            state: DiscoveryState::Loading,
+        };
+        self.set_status("Discovering namespaces...");
     }
 }
 

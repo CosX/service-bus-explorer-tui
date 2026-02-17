@@ -1,7 +1,7 @@
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 
-use crate::app::{ActiveModal, App, FocusPanel, MessageTab};
+use crate::app::{ActiveModal, App, DiscoveryState, FocusPanel, MessageTab};
 use crate::client::models::EntityType;
 
 /// Poll for input events and process them against app state.
@@ -416,15 +416,71 @@ fn handle_modal_input(app: &mut App, key: KeyEvent) {
                 app.modal = ActiveModal::ConnectionInput;
             }
             KeyCode::Char('2') | KeyCode::Char('a') | KeyCode::Char('A') => {
-                // Azure AD
-                app.input_buffer.clear();
-                app.input_cursor = 0;
-                app.modal = ActiveModal::AzureAdNamespaceInput;
+                // Azure AD — start namespace discovery
+                app.start_namespace_discovery();
             }
             KeyCode::Esc => {
                 app.modal = ActiveModal::None;
             }
             _ => {}
+        },
+        ActiveModal::NamespaceDiscovery { state } => match state {
+            DiscoveryState::Loading => {
+                if key.code == KeyCode::Esc {
+                    app.cancel_bg();
+                    app.modal = ActiveModal::None;
+                }
+            }
+            DiscoveryState::List => match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if app.namespace_list_state > 0 {
+                        app.namespace_list_state -= 1;
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if app.namespace_list_state + 1 < app.discovered_namespaces.len() {
+                        app.namespace_list_state += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(ns) = app.discovered_namespaces.get(app.namespace_list_state).cloned() {
+                        // Use the full FQDN (e.g., mynamespace.servicebus.windows.net)
+                        match app.connect_azure_ad(&ns.fqdn) {
+                            Ok(_) => {
+                                app.config.add_azure_ad_connection(ns.name.clone(), ns.fqdn.clone());
+                                let _ = app.config.save();
+                                app.connection_name = Some(ns.name.clone());
+                                app.modal = ActiveModal::None;
+                                app.set_status("Connected via Azure AD! Loading entities...");
+                            }
+                            Err(e) => {
+                                app.set_error(format!("Azure AD connection failed: {}", e));
+                                app.modal = ActiveModal::None;
+                            }
+                        }
+                    }
+                }
+                KeyCode::Char('m') | KeyCode::Char('M') => {
+                    app.input_buffer.clear();
+                    app.input_cursor = 0;
+                    app.modal = ActiveModal::AzureAdNamespaceInput;
+                }
+                KeyCode::Esc => {
+                    app.modal = ActiveModal::None;
+                }
+                _ => {}
+            },
+            DiscoveryState::Error(_) => match key.code {
+                KeyCode::Char('m') | KeyCode::Char('M') => {
+                    app.input_buffer.clear();
+                    app.input_cursor = 0;
+                    app.modal = ActiveModal::AzureAdNamespaceInput;
+                }
+                KeyCode::Esc => {
+                    app.modal = ActiveModal::None;
+                }
+                _ => {}
+            },
         },
         ActiveModal::AzureAdNamespaceInput => match key.code {
             KeyCode::Enter => {

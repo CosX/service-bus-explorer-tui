@@ -96,6 +96,7 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
         ActiveModal::ClearOptions { entity_path, .. } => {
             render_clear_options(frame, entity_path);
         }
+        ActiveModal::NamespaceDiscovery { state } => render_namespace_discovery(frame, app, state),
         ActiveModal::Help | ActiveModal::None => {}
     }
 }
@@ -715,4 +716,249 @@ fn render_clear_options(frame: &mut Frame, entity_path: &str) {
 
     let text = Paragraph::new(lines).alignment(Alignment::Center);
     frame.render_widget(text, inner);
+}
+
+fn render_namespace_discovery(frame: &mut Frame, app: &App, state: &crate::app::DiscoveryState) {
+    use crate::app::DiscoveryState;
+    match state {
+        DiscoveryState::Loading => render_discovery_loading(frame),
+        DiscoveryState::List => render_namespace_list(frame, app),
+        DiscoveryState::Error(msg) => render_discovery_error(frame, msg),
+    }
+}
+
+fn render_discovery_loading(frame: &mut Frame) {
+    let area = centered_rect(50, 20, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Azure AD — Discovering Namespaces ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(""),
+        Line::from(Span::styled(
+            "🔍 Discovering available Service Bus namespaces...",
+            Style::default().fg(Color::Cyan).bold(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Querying Azure subscriptions via Azure CLI credentials",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Esc to cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let text = Paragraph::new(lines).alignment(Alignment::Center);
+    frame.render_widget(text, inner);
+}
+
+fn render_discovery_error(frame: &mut Frame, msg: &str) {
+    let area = centered_rect(60, 30, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Namespace Discovery Failed ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "⚠ Failed to discover namespaces",
+            Style::default().fg(Color::Red).bold(),
+        )),
+        Line::from(""),
+    ];
+
+    // Add error message lines
+    for line in msg.lines() {
+        lines.push(Line::from(Span::styled(
+            line.to_string(),
+            Style::default().fg(Color::White),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("Press ", Style::default().fg(Color::DarkGray)),
+        Span::styled("'m'", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" to enter namespace manually", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(Span::styled(
+        "or Esc to cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let text = Paragraph::new(lines).alignment(Alignment::Center);
+    frame.render_widget(text, inner);
+}
+
+fn render_namespace_list(frame: &mut Frame, app: &App) {
+    let area = centered_rect(80, 70, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Azure AD — Select Service Bus Namespace ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if app.discovered_namespaces.is_empty() {
+        // No namespaces found
+        let lines = vec![
+            Line::from(""),
+            Line::from(""),
+            Line::from(Span::styled(
+                "No Service Bus namespaces found in your Azure subscriptions",
+                Style::default().fg(Color::Yellow).bold(),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Make sure you are logged in with 'az login' and have access to subscriptions",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Press ", Style::default().fg(Color::DarkGray)),
+                Span::styled("'m'", Style::default().fg(Color::Yellow).bold()),
+                Span::styled(" to enter namespace manually", Style::default().fg(Color::DarkGray)),
+            ]),
+            Line::from(Span::styled(
+                "or Esc to cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        let text = Paragraph::new(lines).alignment(Alignment::Center);
+        frame.render_widget(text, inner);
+        return;
+    }
+
+    // Split into header and content area
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // header with count + warnings
+            Constraint::Min(3),    // namespace list
+            Constraint::Length(2), // hints
+        ])
+        .margin(1)
+        .split(inner);
+
+    // Header
+    let mut header_lines = vec![Line::from(Span::styled(
+        format!("Found {} namespace(s)", app.discovered_namespaces.len()),
+        Style::default().fg(Color::Cyan),
+    ))];
+
+    if !app.discovery_warnings.is_empty() {
+        header_lines.push(Line::from(Span::styled(
+            format!("⚠ {} subscription(s) had errors", app.discovery_warnings.len()),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+
+    let header = Paragraph::new(header_lines);
+    frame.render_widget(header, layout[0]);
+
+    // Namespace list
+    let mut items: Vec<ListItem> = Vec::new();
+
+    // Group by subscription
+    let mut by_subscription: std::collections::HashMap<String, Vec<&crate::client::resource_manager::DiscoveredNamespace>> =
+        std::collections::HashMap::new();
+
+    for ns in &app.discovered_namespaces {
+        by_subscription
+            .entry(ns.subscription_name.clone())
+            .or_default()
+            .push(ns);
+    }
+
+    let mut sorted_subs: Vec<_> = by_subscription.keys().collect();
+    sorted_subs.sort();
+
+    let mut idx = 0;
+    for sub_name in sorted_subs {
+        let namespaces = &by_subscription[sub_name];
+
+        // Subscription header
+        items.push(ListItem::new(Line::from(Span::styled(
+            format!("  {}", sub_name),
+            Style::default().fg(Color::Blue).bold(),
+        ))));
+
+        for ns in namespaces {
+            let is_selected = idx == app.namespace_list_state;
+
+            let status_icon = match ns.status.as_str() {
+                "Active" => "✓",
+                "Disabled" | "Disabling" => "✗",
+                _ => "?",
+            };
+
+            let status_color = match ns.status.as_str() {
+                "Active" => Color::Green,
+                "Disabled" | "Disabling" => Color::Red,
+                _ => Color::Yellow,
+            };
+
+            let line_style = if is_selected {
+                Style::default().bg(Color::DarkGray).fg(Color::White)
+            } else {
+                Style::default()
+            };
+
+            let line = Line::from(vec![
+                Span::styled("    ", line_style),
+                Span::styled(status_icon, Style::default().fg(status_color).add_modifier(line_style.add_modifier)),
+                Span::styled(" ", line_style),
+                Span::styled(&ns.name, line_style.fg(Color::White).bold()),
+                Span::styled("  ", line_style),
+                Span::styled(
+                    format!("[{}]", ns.location),
+                    line_style.fg(Color::DarkGray),
+                ),
+                Span::styled("  ", line_style),
+                Span::styled(&ns.status, line_style.fg(status_color)),
+            ]);
+
+            items.push(ListItem::new(line));
+            idx += 1;
+        }
+    }
+
+    let list = List::new(items);
+    frame.render_widget(list, layout[1]);
+
+    // Hints
+    let hints = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("↑↓/j/k", Style::default().fg(Color::Yellow).bold()),
+            Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Enter", Style::default().fg(Color::Yellow).bold()),
+            Span::styled(" connect  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("m", Style::default().fg(Color::Yellow).bold()),
+            Span::styled(" manual  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Esc", Style::default().fg(Color::Yellow).bold()),
+            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+        ]),
+    ]);
+    frame.render_widget(hints, layout[2]);
 }
