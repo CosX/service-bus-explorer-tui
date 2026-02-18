@@ -7,6 +7,17 @@ Built with Rust, [ratatui](https://ratatui.rs), and the Azure Service Bus REST A
 ![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+## Screenshots
+
+![Overview](media/overview.png)
+*Main interface showing entity tree, details, and messages*
+
+![Peeking messages](media/peeking.png)
+*Peeking messages from a queue*
+
+![Clear entity options](media/clear-entity.png)
+*Clear entity dialog with options*
+
 ## Features
 
 - Browse queues, topics, and subscriptions in a navigable tree with inline message counts
