@@ -271,12 +271,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                         app.modal = ActiveModal::NamespaceDiscovery {
                             state: DiscoveryState::Error(error_msg.clone()),
                         };
-                        app.set_status(&format!("Discovery complete: {}", error_msg));
+                        app.set_status(format!("Discovery complete: {}", error_msg));
                     } else {
                         app.modal = ActiveModal::NamespaceDiscovery {
                             state: DiscoveryState::List,
                         };
-                        app.set_status(&format!(
+                        app.set_status(format!(
                             "Found {} namespace(s). Select one or press 'm' for manual entry.",
                             app.discovered_namespaces.len()
                         ));
@@ -287,7 +287,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.modal = ActiveModal::NamespaceDiscovery {
                         state: DiscoveryState::Error(err.clone()),
                     };
-                    app.set_error(&format!("Discovery failed: {}", err));
+                    app.set_error(format!("Discovery failed: {}", err));
                 }
                 BgEvent::TreeRefreshed {
                     mut tree,
