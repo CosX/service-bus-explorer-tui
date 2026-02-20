@@ -73,6 +73,7 @@ pub enum ActiveModal {
     ConnectionModeSelect,
     ConnectionInput,
     ConnectionList,
+    ConnectionSwitch,
     AzureAdNamespaceInput,
     NamespaceDiscovery { state: DiscoveryState },
     SendMessage,
@@ -285,6 +286,40 @@ impl App {
         self.data_plane = Some(DataPlaneClient::new(cfg.clone()));
         self.connection_config = Some(cfg);
         Ok(())
+    }
+
+    /// Disconnect from the current Service Bus namespace and reset all state.
+    pub fn disconnect(&mut self) {
+        // Cancel any running background operations
+        self.cancel_bg();
+
+        // Clear connection state
+        self.management = None;
+        self.data_plane = None;
+        self.connection_config = None;
+        self.connection_name = None;
+
+        // Clear tree state
+        self.tree = None;
+        self.flat_nodes.clear();
+        self.tree_selected = 0;
+        self.detail_view = DetailView::None;
+
+        // Clear message state
+        self.messages.clear();
+        self.dlq_messages.clear();
+        self.message_selected = 0;
+        self.selected_message_detail = None;
+        self.detail_editing = false;
+        self.edit_source_dlq_seq = None;
+
+        // Reset UI state
+        self.focus = FocusPanel::Tree;
+        self.loading = false;
+        self.bg_running = false;
+
+        // Set status
+        self.set_status("Disconnected. Press 'c' to connect, '?' for help");
     }
 
     /// Refresh the entity tree from the management API.

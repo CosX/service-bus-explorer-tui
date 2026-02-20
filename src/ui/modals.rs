@@ -53,6 +53,7 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
         ActiveModal::ConnectionModeSelect => render_connection_mode_select(frame),
         ActiveModal::ConnectionInput => render_connection_input(frame, app),
         ActiveModal::ConnectionList => render_connection_list(frame, app),
+        ActiveModal::ConnectionSwitch => render_connection_switch(frame, app),
         ActiveModal::AzureAdNamespaceInput => render_azure_ad_input(frame, app),
         ActiveModal::SendMessage => render_form(frame, app, "Send Message", "F2 to send"),
         ActiveModal::EditResend => render_form(frame, app, "Edit & Resend", "F2 to resend"),
@@ -296,6 +297,51 @@ fn render_azure_ad_input(frame: &mut Frame, app: &App) {
     let cursor_x = layout[1].x + app.input_cursor as u16 + 1;
     let cursor_y = layout[1].y + 1;
     frame.set_cursor_position((cursor_x, cursor_y));
+}
+
+fn render_connection_switch(frame: &mut Frame, app: &App) {
+    let area = centered_rect(50, 40, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Connection Management ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let current_conn = app
+        .connection_name
+        .as_deref()
+        .unwrap_or("Unknown");
+
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Current connection: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(current_conn, Style::default().fg(Color::White).bold()),
+        ]),
+        Line::from(""),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  [D] ", Style::default().fg(Color::Yellow).bold()),
+            Span::raw("Disconnect"),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  [S] ", Style::default().fg(Color::Yellow).bold()),
+            Span::raw("Switch connection"),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  [C/Esc] ", Style::default().fg(Color::Yellow).bold()),
+            Span::raw("Cancel (stay connected)"),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text).alignment(Alignment::Center);
+    frame.render_widget(paragraph, inner);
 }
 
 fn render_form(frame: &mut Frame, app: &mut App, title: &str, hint: &str) {

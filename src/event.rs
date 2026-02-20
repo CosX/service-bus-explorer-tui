@@ -43,7 +43,9 @@ pub fn handle_events(app: &mut App) -> anyhow::Result<bool> {
                     return Ok(true);
                 }
                 KeyCode::Char('c') if key.modifiers.is_empty() => {
-                    if app.management.is_none() {
+                    if app.bg_running {
+                        app.set_status("A background operation is in progress. Press Esc to cancel first.");
+                    } else if app.management.is_none() {
                         // Open connection flow
                         app.input_buffer.clear();
                         app.input_cursor = 0;
@@ -52,6 +54,9 @@ pub fn handle_events(app: &mut App) -> anyhow::Result<bool> {
                         } else {
                             app.modal = ActiveModal::ConnectionList;
                         }
+                    } else {
+                        // Already connected — open switch modal
+                        app.modal = ActiveModal::ConnectionSwitch;
                     }
                     return Ok(true);
                 }
@@ -679,6 +684,31 @@ fn handle_modal_input(app: &mut App, key: KeyEvent) {
                         app.modal = ActiveModal::ConnectionModeSelect;
                     }
                 }
+            }
+            _ => {}
+        },
+        ActiveModal::ConnectionSwitch => match key.code {
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                // Disconnect and close modal
+                app.disconnect();
+                app.modal = ActiveModal::None;
+                app.set_status("Disconnected");
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                // Switch: disconnect, reset state, open connection picker
+                app.disconnect();
+                app.input_buffer.clear();
+                app.input_cursor = 0;
+                app.input_field_index = 0;
+                if app.config.connections.is_empty() {
+                    app.modal = ActiveModal::ConnectionModeSelect;
+                } else {
+                    app.modal = ActiveModal::ConnectionList;
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('C') => {
+                // Cancel — stay connected
+                app.modal = ActiveModal::None;
             }
             _ => {}
         },

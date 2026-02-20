@@ -387,6 +387,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
         // ──────── Async action dispatch ────────
         // All operations are spawned as background tasks to keep the UI responsive.
 
+        // Safety: Reset loading state if disconnected while an operation was queued
+        if app.management.is_none() && app.loading {
+            app.loading = false;
+            app.bg_running = false;
+        }
+
         // Connection just established — trigger tree refresh
         if app.management.is_some() && app.tree.is_none() && !app.loading {
             needs_refresh = true;
