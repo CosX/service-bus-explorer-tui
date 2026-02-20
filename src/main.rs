@@ -381,6 +381,29 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                         app.modal = ActiveModal::None;
                     }
                 }
+                BgEvent::DestinationEntitiesLoaded { entities } => {
+                    app.copy_dest_entities = entities;
+                    app.copy_entity_selected = 0;
+                    app.copy_entity_list_state.select(Some(0));
+                    app.bg_running = false;
+                    
+                    if app.copy_dest_entities.is_empty() {
+                        app.set_status("No entities found in destination namespace");
+                    } else {
+                        app.set_status(format!("Loaded {} entities", app.copy_dest_entities.len()));
+                    }
+                }
+                BgEvent::MessageCopyComplete { status } => {
+                    app.set_status(status);
+                    app.bg_running = false;
+                    app.copy_source_message = None;
+                    app.copy_source_entity = None;
+                    app.copy_dest_entities.clear();
+                    app.copy_entity_selected = 0;
+                    app.copy_dest_connection_name = None;
+                    app.copy_dest_connection_config = None;
+                    app.copy_destination_entity = None;
+                }
             }
         }
 
@@ -975,6 +998,66 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                         }
                     }
                 });
+            }
+        }
+
+        // Load destination entities for copy operation
+        if app.status_message == "Loading destination entities..."
+            && app.modal == ActiveModal::CopySelectEntity
+        {
+            if let Some(conn_cfg) = app.copy_dest_connection_config.clone() {
+                let tx = app.bg_tx.clone();
+                
+                app.bg_running = true;
+                tokio::spawn(async move {
+                    match App::fetch_destination_entities(conn_cfg).await {
+                        Ok(entities) => {
+                            let _ = tx.send(BgEvent::DestinationEntitiesLoaded { entities });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(BgEvent::Failed(format!("Failed to load entities: {}", e)));
+                        }
+                    }
+                });
+            }
+        }
+
+        // Copy message to destination (with editing)
+        if app.status_message == "Submitting..." && app.modal == ActiveModal::CopyEditMessage {
+            if let (Some(dest_entity), Some(conn_cfg), Some(conn_name)) = (
+                app.copy_destination_entity.clone(),
+                app.copy_dest_connection_config.clone(),
+                app.copy_dest_connection_name.clone(),
+            ) {
+                let msg = app.build_message_from_form();
+                let tx = app.bg_tx.clone();
+                
+                app.bg_running = true;
+                app.modal = ActiveModal::None;
+                app.set_status("Copying...");
+                
+                tokio::spawn(async move {
+                    // Create temporary data plane client for destination
+                    let dest_dp = crate::client::DataPlaneClient::new(conn_cfg);
+                    
+                    // Send to destination
+                    match dest_dp.send_message(&dest_entity, &msg).await {
+                        Ok(_) => {
+                            let _ = tx.send(BgEvent::MessageCopyComplete {
+                                status: format!(
+                                    "Message copied to '{}' in connection '{}'",
+                                    dest_entity, conn_name
+                                ),
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(BgEvent::Failed(format!("Copy failed: {}", e)));
+                        }
+                    }
+                });
+            } else {
+                app.set_error("Missing destination configuration");
+                app.modal = ActiveModal::None;
             }
         }
 

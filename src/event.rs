@@ -401,6 +401,38 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
                 }
             }
         }
+        // C = Copy message to different connection/entity
+        KeyCode::Char('C') => {
+            if app.bg_running {
+                app.set_status("A background operation is in progress...");
+            } else {
+                // Clone all necessary data before any mutations
+                let msg = if app.selected_message_detail.is_some() {
+                    app.selected_message_detail.clone()
+                } else {
+                    match app.message_tab {
+                        MessageTab::Messages => app.messages.get(app.message_selected).cloned(),
+                        MessageTab::DeadLetter => app.dlq_messages.get(app.message_selected).cloned(),
+                    }
+                };
+                let has_connections = !app.config.connections.is_empty();
+                let entity_path = app.selected_entity().map(|(path, _)| path.to_string());
+                
+                if let Some(message) = msg {
+                    if !has_connections {
+                        app.set_error("No saved connections available. Add a connection first.");
+                    } else if let Some(path) = entity_path {
+                        app.copy_source_message = Some(message);
+                        app.copy_source_entity = Some(path);
+                        app.input_field_index = 0;
+                        app.copy_connection_list_state.select(Some(0));
+                        app.modal = ActiveModal::CopySelectConnection;
+                    }
+                } else {
+                    app.set_status("No message selected");
+                }
+            }
+        }
         KeyCode::Esc => {
             app.selected_message_detail = None;
             app.detail_body_scroll = 0;
@@ -769,11 +801,152 @@ fn handle_modal_input(app: &mut App, key: KeyEvent) {
             KeyCode::End => app.input_cursor = app.input_buffer.len(),
             _ => {}
         },
+        ActiveModal::CopySelectConnection => match key.code {
+            KeyCode::Esc => {
+                app.modal = ActiveModal::None;
+                app.copy_source_message = None;
+                app.copy_source_entity = None;
+            }
+            KeyCode::Up => {
+                if app.input_field_index > 0 {
+                    app.input_field_index -= 1;
+                    app.copy_connection_list_state.select(Some(app.input_field_index));
+                }
+            }
+            KeyCode::Down => {
+                if app.input_field_index + 1 < app.config.connections.len() {
+                    app.input_field_index += 1;
+                    app.copy_connection_list_state.select(Some(app.input_field_index));
+                }
+            }
+            KeyCode::Char('k') if key.modifiers.is_empty() => {
+                if app.input_field_index > 0 {
+                    app.input_field_index -= 1;
+                    app.copy_connection_list_state.select(Some(app.input_field_index));
+                }
+            }
+            KeyCode::Char('j') if key.modifiers.is_empty() => {
+                if app.input_field_index + 1 < app.config.connections.len() {
+                    app.input_field_index += 1;
+                    app.copy_connection_list_state.select(Some(app.input_field_index));
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(conn) = app.config.connections.get(app.input_field_index) {
+                    let name = conn.name.clone();
+                    let is_ad = conn.is_azure_ad();
+                    
+                    // Build ConnectionConfig for destination
+                    let config_result: Result<crate::client::ConnectionConfig, String> = if is_ad {
+                        if let Some(ref ns) = conn.namespace {
+                            match azure_identity::DefaultAzureCredential::new() {
+                                Ok(cred) => Ok(crate::client::ConnectionConfig::from_azure_ad(
+                                    ns,
+                                    cred,
+                                )),
+                                Err(e) => Err(format!("Azure AD credential error: {}", e)),
+                            }
+                        } else {
+                            Err("No namespace configured for Azure AD connection".to_string())
+                        }
+                    } else {
+                        if let Some(ref cs) = conn.connection_string {
+                            crate::client::ConnectionConfig::from_connection_string(cs)
+                                .map_err(|e| format!("Connection string parse error: {}", e))
+                        } else {
+                            Err("No connection string configured".to_string())
+                        }
+                    };
+                    
+                    match config_result {
+                        Ok(config) => {
+                            app.copy_dest_connection_name = Some(name);
+                            app.copy_dest_connection_config = Some(config);
+                            app.copy_dest_entities.clear();
+                            app.copy_entity_selected = 0;
+                            app.copy_entity_list_state.select(Some(0));
+                            app.set_status("Loading destination entities...");
+                            app.modal = ActiveModal::CopySelectEntity;
+                        }
+                        Err(e) => {
+                            app.set_error(format!("Failed to create destination connection: {}", e));
+                            app.modal = ActiveModal::None;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        },
+
+        ActiveModal::CopySelectEntity => match key.code {
+            KeyCode::Esc => {
+                app.modal = ActiveModal::None;
+                app.copy_source_message = None;
+                app.copy_source_entity = None;
+                app.copy_dest_entities.clear();
+                app.copy_entity_selected = 0;
+                app.copy_dest_connection_name = None;
+                app.copy_dest_connection_config = None;
+            }
+            KeyCode::Up => {
+                if app.copy_entity_selected > 0 {
+                    app.copy_entity_selected -= 1;
+                    app.copy_entity_list_state.select(Some(app.copy_entity_selected));
+                }
+            }
+            KeyCode::Down => {
+                if app.copy_entity_selected + 1 < app.copy_dest_entities.len() {
+                    app.copy_entity_selected += 1;
+                    app.copy_entity_list_state.select(Some(app.copy_entity_selected));
+                }
+            }
+            KeyCode::Char('k') if key.modifiers.is_empty() => {
+                if app.copy_entity_selected > 0 {
+                    app.copy_entity_selected -= 1;
+                    app.copy_entity_list_state.select(Some(app.copy_entity_selected));
+                }
+            }
+            KeyCode::Char('j') if key.modifiers.is_empty() => {
+                if app.copy_entity_selected + 1 < app.copy_dest_entities.len() {
+                    app.copy_entity_selected += 1;
+                    app.copy_entity_list_state.select(Some(app.copy_entity_selected));
+                }
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                // Use same entity name as source
+                if let Some(ref src_entity) = app.copy_source_entity {
+                    let entity_name = src_entity.split('/').next().unwrap_or(src_entity);
+                    let exists = app.copy_dest_entities.iter().any(|(name, _)| name == entity_name);
+                    
+                    if exists {
+                        app.copy_destination_entity = Some(entity_name.to_string());
+                        if let Some(msg) = app.copy_source_message.clone() {
+                            app.populate_edit_fields(&msg);
+                            app.modal = ActiveModal::CopyEditMessage;
+                        }
+                    } else {
+                        app.set_error(format!("Entity '{}' not found in destination", entity_name));
+                    }
+                }
+            }
+            KeyCode::Enter => {
+                if let Some((entity, _)) = app.copy_dest_entities.get(app.copy_entity_selected) {
+                    app.copy_destination_entity = Some(entity.clone());
+                    if let Some(msg) = app.copy_source_message.clone() {
+                        app.populate_edit_fields(&msg);
+                        app.modal = ActiveModal::CopyEditMessage;
+                    }
+                }
+            }
+            _ => {}
+        },
+
         ActiveModal::SendMessage
         | ActiveModal::EditResend
         | ActiveModal::CreateQueue
         | ActiveModal::CreateTopic
-        | ActiveModal::CreateSubscription => {
+        | ActiveModal::CreateSubscription
+        | ActiveModal::CopyEditMessage => {
             handle_form_input(app, key);
         }
         ActiveModal::None => {}
@@ -783,6 +956,16 @@ fn handle_modal_input(app: &mut App, key: KeyEvent) {
 fn handle_form_input(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Esc => {
+            // Clean up copy state if canceling from copy edit modal
+            if app.modal == ActiveModal::CopyEditMessage {
+                app.copy_source_message = None;
+                app.copy_source_entity = None;
+                app.copy_dest_entities.clear();
+                app.copy_entity_selected = 0;
+                app.copy_dest_connection_name = None;
+                app.copy_dest_connection_config = None;
+                app.copy_destination_entity = None;
+            }
             app.modal = ActiveModal::None;
         }
         _ => {

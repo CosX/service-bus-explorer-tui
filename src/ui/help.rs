@@ -64,6 +64,10 @@ pub fn render_help(frame: &mut Frame) {
             Style::default().fg(Color::DarkGray),
         )),
         Line::from("  e              Edit & resend (inline WYSIWYG)"),
+        Line::from(vec![
+            Span::styled("  C       ", Style::default().fg(Color::Yellow)),
+            Span::raw("Copy message to different connection"),
+        ]),
         Line::from(""),
         Line::from(vec![Span::styled(
             "  Editing (inline & forms)",

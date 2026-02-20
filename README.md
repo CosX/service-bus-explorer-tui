@@ -21,10 +21,12 @@ Built with Rust, [ratatui](https://ratatui.rs), and the Azure Service Bus REST A
 ## Features
 
 - Browse queues, topics, and subscriptions in a navigable tree with inline message counts
+- Topic-level aggregated counts — topics display total active and DLQ messages summed across all subscriptions
 - View entity properties and runtime metrics (active, DLQ, scheduled, transfer counts)
 - Peek messages and dead-letter queues (with configurable count)
 - Send messages with custom properties, content type, TTL, session ID, and more
 - Edit & resend messages inline (WYSIWYG) — including DLQ messages back to the main entity
+- Copy messages across connections — copy messages (active or DLQ) to different Service Bus namespaces with full edit support
 - Create and delete queues, topics, and subscriptions
 - Purge messages — concurrent delete, DLQ clear, or DLQ resend (with progress & cancellation)
 - Bulk resend DLQ → main entity and bulk delete from messages panel
@@ -163,6 +165,23 @@ On launch you'll see an empty tree panel. Press **`c`** to open the connection d
 
 Connections are saved to the config file for reconnection on next launch.
 
+### Copy messages across connections
+
+The copy message feature allows you to copy messages from one namespace to another with full editing support:
+
+1. Select a message from the Messages or DLQ tab
+2. Press **`C`** (shift+c) to start the copy workflow
+3. **Select destination connection** from your saved connections (with scrollable list)
+4. **Select destination entity** (queue or topic), or press **`s`** to use the same entity name
+5. **Edit the message** in the form editor (modify body, properties, headers)
+6. Press **`F2`** to copy the message to the destination
+
+The copied message preserves all custom properties and metadata while allowing you to modify content before sending. This is useful for:
+- Copying test data between environments
+- Moving messages during migrations
+- Replaying messages with modifications
+- Cross-namespace message forwarding
+
 ### Config file location
 
 | OS      | Path                                                        |
@@ -212,6 +231,7 @@ Connections are saved to the config file for reconnection on next launch.
 | `Enter`          | View message detail                      |
 | `Esc`            | Close detail view                        |
 | `e`              | Edit & resend message (inline WYSIWYG)   |
+| `C` (shift)      | Copy message to different connection     |
 | `R` (shift)      | Bulk resend all DLQ → main entity        |
 | `D` (shift)      | Bulk delete all visible messages         |
 

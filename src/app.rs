@@ -58,6 +58,12 @@ pub enum BgEvent {
     },
     /// Namespace discovery failed.
     DiscoveryFailed(String),
+    DestinationEntitiesLoaded {
+        entities: Vec<(String, EntityType)>,
+    },
+    MessageCopyComplete {
+        status: String,
+    },
 }
 
 /// Which panel is currently focused.
@@ -104,6 +110,9 @@ pub enum ActiveModal {
         is_topic: bool,
     },
     Help,
+    CopySelectConnection,
+    CopySelectEntity,
+    CopyEditMessage,
 }
 
 /// State of the namespace discovery modal.
@@ -198,6 +207,17 @@ pub struct App {
     pub message_table_state: TableState,
     /// Scroll offset for the read-only message body detail view.
     pub detail_body_scroll: u16,
+
+    // Copy operation state
+    pub copy_source_message: Option<ReceivedMessage>,
+    pub copy_source_entity: Option<String>,
+    pub copy_dest_connection_name: Option<String>,
+    pub copy_dest_connection_config: Option<ConnectionConfig>,
+    pub copy_dest_entities: Vec<(String, EntityType)>,
+    pub copy_entity_selected: usize,
+    pub copy_connection_list_state: ListState,
+    pub copy_entity_list_state: ListState,
+    pub copy_destination_entity: Option<String>,
 }
 
 impl App {
@@ -246,6 +266,15 @@ impl App {
             tree_list_state: ListState::default(),
             message_table_state: TableState::default(),
             detail_body_scroll: 0,
+            copy_source_message: None,
+            copy_source_entity: None,
+            copy_dest_connection_name: None,
+            copy_dest_connection_config: None,
+            copy_dest_entities: Vec::new(),
+            copy_entity_selected: 0,
+            copy_connection_list_state: ListState::default(),
+            copy_entity_list_state: ListState::default(),
+            copy_destination_entity: None,
         }
     }
 
@@ -432,7 +461,7 @@ impl App {
     }
 
     /// Populate input_fields from a ReceivedMessage (shared by modal and inline edit).
-    fn populate_edit_fields(&mut self, msg: &ReceivedMessage) {
+    pub fn populate_edit_fields(&mut self, msg: &ReceivedMessage) {
         let custom_props_str = msg
             .custom_properties
             .iter()
@@ -646,6 +675,35 @@ impl App {
             state: DiscoveryState::Loading,
         };
         self.set_status("Discovering namespaces...");
+    }
+
+    /// Fetch entity list from a destination connection for copy target selection.
+    pub async fn fetch_destination_entities(
+        config: crate::client::ConnectionConfig,
+    ) -> crate::client::Result<Vec<(String, EntityType)>> {
+        let mgmt = crate::client::ManagementClient::new(config);
+        let mut entities = Vec::new();
+
+        // Fetch queues and topics in parallel
+        let (queues_result, topics_result) = tokio::join!(
+            mgmt.list_queues_with_counts(),
+            mgmt.list_topics()
+        );
+
+        if let Ok(queues) = queues_result {
+            for (q, _, _) in queues {
+                entities.push((q.name.clone(), EntityType::Queue));
+            }
+        }
+
+        if let Ok(topics) = topics_result {
+            for t in topics {
+                entities.push((t.name.clone(), EntityType::Topic));
+            }
+        }
+
+        entities.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(entities)
     }
 }
 

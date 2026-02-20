@@ -98,6 +98,18 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
             render_clear_options(frame, entity_path);
         }
         ActiveModal::NamespaceDiscovery { state } => render_namespace_discovery(frame, app, state),
+        ActiveModal::CopySelectConnection => render_copy_select_connection(frame, app),
+        ActiveModal::CopySelectEntity => render_copy_select_entity(frame, app),
+        ActiveModal::CopyEditMessage => {
+            let dest = app.copy_destination_entity.as_deref().unwrap_or("destination");
+            let conn = app.copy_dest_connection_name.as_deref().unwrap_or("connection");
+            render_form(
+                frame,
+                app,
+                &format!("Copy to {} @ {}", dest, conn),
+                "F2 to copy | Esc to cancel",
+            )
+        }
         ActiveModal::Help | ActiveModal::None => {}
     }
 }
@@ -1011,6 +1023,177 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
         Span::styled(" connect  ", Style::default().fg(Color::DarkGray)),
         Span::styled("m", Style::default().fg(Color::Yellow).bold()),
         Span::styled(" manual  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Esc", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+    ])]);
+    frame.render_widget(hints, layout[2]);
+}
+
+fn render_copy_select_connection(frame: &mut Frame, app: &mut App) {
+    let area = centered_rect(70, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" Copy Message — Select Destination Connection ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // header
+            Constraint::Min(3),    // connection list
+            Constraint::Length(1), // footer hints
+        ])
+        .margin(1)
+        .split(inner);
+
+    // Header
+    let header = Paragraph::new("Select a destination connection to copy this message to.")
+        .style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(header, layout[0]);
+
+    // Connection list
+    let items: Vec<ListItem> = app
+        .config
+        .connections
+        .iter()
+        .map(|conn| {
+            let auth_type = if conn.is_azure_ad() {
+                "Azure AD"
+            } else {
+                "SAS"
+            };
+            let display_name = if let Some(namespace) = &conn.namespace {
+                format!("{} — [{}]", conn.name, namespace)
+            } else {
+                conn.name.clone()
+            };
+            ListItem::new(Line::from(Span::raw(
+                format!("  {} ({})", display_name, auth_type),
+            )))
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White).bold());
+    
+    app.copy_connection_list_state.select(Some(app.input_field_index));
+    frame.render_stateful_widget(list, layout[1], &mut app.copy_connection_list_state);
+
+    // Footer hints
+    let hints = Paragraph::new(vec![Line::from(vec![
+        Span::styled("↑↓/j/k", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" navigate | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" select | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Esc", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+    ])]);
+    frame.render_widget(hints, layout[2]);
+}
+
+fn render_copy_select_entity(frame: &mut Frame, app: &mut App) {
+    let area = centered_rect(70, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    let connection_name = app
+        .copy_dest_connection_name
+        .as_deref()
+        .unwrap_or("Unknown");
+
+    let block = Block::default()
+        .title(format!(
+            " Copy Message — Select Destination Entity [{}] ",
+            connection_name
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // header (2 lines)
+            Constraint::Min(3),    // entity list
+            Constraint::Length(1), // footer hints
+        ])
+        .margin(1)
+        .split(inner);
+
+    // Header
+    let source_entity = app
+        .selected_entity()
+        .map(|(path, _)| path.to_string())
+        .unwrap_or_else(|| "(unknown)".to_string());
+    let header = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Source: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(source_entity, Style::default().fg(Color::Yellow)),
+        ]),
+        Line::from(Span::styled(
+            "Select destination queue or topic, or press 's' to use same entity name.",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ]);
+    frame.render_widget(header, layout[0]);
+
+    // Entity list
+    // Use copy_dest_entities from app state
+    let has_entities = !app.copy_dest_entities.is_empty();
+    
+    if !has_entities {
+        let loading = Paragraph::new("Loading entities...")
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+        frame.render_widget(loading, layout[1]);
+    } else {
+        // Render entity list with type icons
+        // Use copy_dest_entities from app state
+        use crate::client::models::EntityType;
+        
+        let items: Vec<ListItem> = app
+            .copy_dest_entities
+            .iter()
+            .map(|(path, entity_type)| {
+                let icon = match entity_type {
+                    EntityType::Queue => "📬",
+                    EntityType::Topic => "📢",
+                    _ => "",
+                };
+                ListItem::new(Line::from(Span::raw(
+                    format!("  {} {}", icon, path),
+                )))
+            })
+            .collect();
+
+        if items.is_empty() {
+            let empty_msg = Paragraph::new("No queues or topics found")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center);
+            frame.render_widget(empty_msg, layout[1]);
+        } else {
+            let list = List::new(items)
+                .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White).bold());
+            
+            app.copy_entity_list_state.select(Some(app.copy_entity_selected));
+            frame.render_stateful_widget(list, layout[1], &mut app.copy_entity_list_state);
+        }
+    }
+
+    // Footer hints
+    let hints = Paragraph::new(vec![Line::from(vec![
+        Span::styled("↑↓/j/k", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" navigate | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" select | ", Style::default().fg(Color::DarkGray)),
+        Span::styled("s", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" use source name | ", Style::default().fg(Color::DarkGray)),
         Span::styled("Esc", Style::default().fg(Color::Yellow).bold()),
         Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
     ])]);
