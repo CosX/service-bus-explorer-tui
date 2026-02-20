@@ -454,7 +454,23 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                     mgmt.get_topic(&path).await,
                                     mgmt.get_topic_runtime_info(&path).await,
                                 ) {
-                                    (Ok(desc), Ok(rt)) => Some(DetailView::Topic(desc, Some(rt))),
+                                    (Ok(desc), Ok(mut rt)) => {
+                                        // Aggregate subscription counts
+                                        if let Ok(subs) =
+                                            mgmt.list_subscriptions_with_counts(&path).await
+                                        {
+                                            let (total_active, total_dlq): (i64, i64) =
+                                                subs.iter().fold(
+                                                    (0, 0),
+                                                    |(active, dlq), (_, sub_active, sub_dlq)| {
+                                                        (active + sub_active, dlq + sub_dlq)
+                                                    },
+                                                );
+                                            rt.active_message_count = total_active;
+                                            rt.dead_letter_message_count = total_dlq;
+                                        }
+                                        Some(DetailView::Topic(desc, Some(rt)))
+                                    }
                                     (Ok(desc), Err(_)) => Some(DetailView::Topic(desc, None)),
                                     _ => None,
                                 }

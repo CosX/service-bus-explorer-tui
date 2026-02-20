@@ -869,6 +869,8 @@ fn parse_topic_runtime_info(name: &str, xml: &str) -> Result<TopicRuntimeInfo> {
         updated_at: extract_element_value(xml, "UpdatedAt"),
         accessed_at: extract_element_value(xml, "AccessedAt"),
         scheduled_message_count: scheduled,
+        active_message_count: 0,
+        dead_letter_message_count: 0,
     })
 }
 

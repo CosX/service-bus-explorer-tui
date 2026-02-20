@@ -56,6 +56,8 @@ pub struct TopicDescription {
 pub struct TopicRuntimeInfo {
     pub name: String,
     pub subscription_count: i64,
+    pub active_message_count: i64,
+    pub dead_letter_message_count: i64,
     pub size_in_bytes: i64,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,

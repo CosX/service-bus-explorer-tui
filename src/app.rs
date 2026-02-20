@@ -723,6 +723,9 @@ pub async fn build_tree(
         );
 
         if let Some(subs) = subs_by_topic.remove(&t.name) {
+            let mut total_active = 0i64;
+            let mut total_dlq = 0i64;
+
             let mut sub_folder = TreeNode::new_folder(
                 &format!("t:{}:subs", t.name),
                 "Subscriptions",
@@ -730,6 +733,9 @@ pub async fn build_tree(
                 3,
             );
             for (s, active_count, dlq_count) in &subs {
+                total_active += active_count;
+                total_dlq += dlq_count;
+
                 let sub_path = format!("{}/Subscriptions/{}", t.name, s.name);
                 let mut sub_node = TreeNode::new_entity(
                     &format!("s:{}:{}", t.name, s.name),
@@ -742,6 +748,11 @@ pub async fn build_tree(
                 sub_node.dlq_count = Some(*dlq_count);
                 sub_folder.children.push(sub_node);
             }
+
+            // Set aggregated counts on topic
+            topic_node.message_count = Some(total_active);
+            topic_node.dlq_count = Some(total_dlq);
+
             topic_node.children.push(sub_folder);
         }
         topic_folder.children.push(topic_node);

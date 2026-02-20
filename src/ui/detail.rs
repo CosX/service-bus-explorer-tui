@@ -91,6 +91,14 @@ pub fn render_detail(frame: &mut Frame, app: &App, area: Rect) {
                     &rt.subscription_count.to_string(),
                 ));
                 rows.push(make_row(
+                    "Active Messages",
+                    &rt.active_message_count.to_string(),
+                ));
+                rows.push(make_row(
+                    "Dead-letter",
+                    &rt.dead_letter_message_count.to_string(),
+                ));
+                rows.push(make_row(
                     "Scheduled",
                     &rt.scheduled_message_count.to_string(),
                 ));
