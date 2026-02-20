@@ -44,7 +44,9 @@ pub fn handle_events(app: &mut App) -> anyhow::Result<bool> {
                 }
                 KeyCode::Char('c') if key.modifiers.is_empty() => {
                     if app.bg_running {
-                        app.set_status("A background operation is in progress. Press Esc to cancel first.");
+                        app.set_status(
+                            "A background operation is in progress. Press Esc to cancel first.",
+                        );
                     } else if app.management.is_none() {
                         // Open connection flow
                         app.input_buffer.clear();
@@ -448,11 +450,16 @@ fn handle_modal_input(app: &mut App, key: KeyEvent) {
                     }
                 }
                 KeyCode::Enter => {
-                    if let Some(ns) = app.discovered_namespaces.get(app.namespace_list_state).cloned() {
+                    if let Some(ns) = app
+                        .discovered_namespaces
+                        .get(app.namespace_list_state)
+                        .cloned()
+                    {
                         // Use the full FQDN (e.g., mynamespace.servicebus.windows.net)
                         match app.connect_azure_ad(&ns.fqdn) {
                             Ok(_) => {
-                                app.config.add_azure_ad_connection(ns.name.clone(), ns.fqdn.clone());
+                                app.config
+                                    .add_azure_ad_connection(ns.name.clone(), ns.fqdn.clone());
                                 let _ = app.config.save();
                                 app.connection_name = Some(ns.name.clone());
                                 app.modal = ActiveModal::None;

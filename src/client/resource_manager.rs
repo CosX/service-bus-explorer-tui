@@ -103,10 +103,7 @@ impl ResourceManagerClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| String::from("(no body)"));
-            return Err(format!(
-                "Subscription list failed ({}): {}",
-                status, body
-            ));
+            return Err(format!("Subscription list failed ({}): {}", status, body));
         }
 
         let parsed: SubscriptionListResponse = response

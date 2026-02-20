@@ -311,10 +311,7 @@ fn render_connection_switch(frame: &mut Frame, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let current_conn = app
-        .connection_name
-        .as_deref()
-        .unwrap_or("Unknown");
+    let current_conn = app.connection_name.as_deref().unwrap_or("Unknown");
 
     let text = vec![
         Line::from(""),
@@ -842,7 +839,10 @@ fn render_discovery_error(frame: &mut Frame, msg: &str) {
     lines.push(Line::from(vec![
         Span::styled("Press ", Style::default().fg(Color::DarkGray)),
         Span::styled("'m'", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" to enter namespace manually", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            " to enter namespace manually",
+            Style::default().fg(Color::DarkGray),
+        ),
     ]));
     lines.push(Line::from(Span::styled(
         "or Esc to cancel",
@@ -884,7 +884,10 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
             Line::from(vec![
                 Span::styled("Press ", Style::default().fg(Color::DarkGray)),
                 Span::styled("'m'", Style::default().fg(Color::Yellow).bold()),
-                Span::styled(" to enter namespace manually", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    " to enter namespace manually",
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]),
             Line::from(Span::styled(
                 "or Esc to cancel",
@@ -915,7 +918,10 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
 
     if !app.discovery_warnings.is_empty() {
         header_lines.push(Line::from(Span::styled(
-            format!("⚠ {} subscription(s) had errors", app.discovery_warnings.len()),
+            format!(
+                "⚠ {} subscription(s) had errors",
+                app.discovery_warnings.len()
+            ),
             Style::default().fg(Color::Yellow),
         )));
     }
@@ -927,8 +933,10 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
     let mut items: Vec<ListItem> = Vec::new();
 
     // Group by subscription
-    let mut by_subscription: std::collections::HashMap<String, Vec<&crate::client::resource_manager::DiscoveredNamespace>> =
-        std::collections::HashMap::new();
+    let mut by_subscription: std::collections::HashMap<
+        String,
+        Vec<&crate::client::resource_manager::DiscoveredNamespace>,
+    > = std::collections::HashMap::new();
 
     for ns in &app.discovered_namespaces {
         by_subscription
@@ -973,14 +981,16 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
 
             let line = Line::from(vec![
                 Span::styled("    ", line_style),
-                Span::styled(status_icon, Style::default().fg(status_color).add_modifier(line_style.add_modifier)),
+                Span::styled(
+                    status_icon,
+                    Style::default()
+                        .fg(status_color)
+                        .add_modifier(line_style.add_modifier),
+                ),
                 Span::styled(" ", line_style),
                 Span::styled(&ns.name, line_style.fg(Color::White).bold()),
                 Span::styled("  ", line_style),
-                Span::styled(
-                    format!("[{}]", ns.location),
-                    line_style.fg(Color::DarkGray),
-                ),
+                Span::styled(format!("[{}]", ns.location), line_style.fg(Color::DarkGray)),
                 Span::styled("  ", line_style),
                 Span::styled(&ns.status, line_style.fg(status_color)),
             ]);
@@ -994,17 +1004,15 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
     frame.render_widget(list, layout[1]);
 
     // Hints
-    let hints = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled("↑↓/j/k", Style::default().fg(Color::Yellow).bold()),
-            Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Enter", Style::default().fg(Color::Yellow).bold()),
-            Span::styled(" connect  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("m", Style::default().fg(Color::Yellow).bold()),
-            Span::styled(" manual  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Esc", Style::default().fg(Color::Yellow).bold()),
-            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
-        ]),
-    ]);
+    let hints = Paragraph::new(vec![Line::from(vec![
+        Span::styled("↑↓/j/k", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" connect  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("m", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" manual  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Esc", Style::default().fg(Color::Yellow).bold()),
+        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+    ])]);
     frame.render_widget(hints, layout[2]);
 }

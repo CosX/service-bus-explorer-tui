@@ -260,14 +260,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.bg_running = false;
                     app.discovered_namespaces = result.namespaces;
                     app.discovery_warnings = result.errors;
-                    
+
                     if app.discovered_namespaces.is_empty() {
                         let error_msg = if !app.discovery_warnings.is_empty() {
                             app.discovery_warnings.join("; ")
                         } else {
                             "No Service Bus namespaces found in your subscriptions".to_string()
                         };
-                        
+
                         app.modal = ActiveModal::NamespaceDiscovery {
                             state: DiscoveryState::Error(error_msg.clone()),
                         };

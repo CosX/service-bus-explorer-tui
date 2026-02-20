@@ -53,7 +53,9 @@ pub enum BgEvent {
         was_inline: bool,
     },
     /// Namespace discovery completed.
-    NamespacesDiscovered { result: DiscoveryResult },
+    NamespacesDiscovered {
+        result: DiscoveryResult,
+    },
     /// Namespace discovery failed.
     DiscoveryFailed(String),
 }
@@ -75,7 +77,9 @@ pub enum ActiveModal {
     ConnectionList,
     ConnectionSwitch,
     AzureAdNamespaceInput,
-    NamespaceDiscovery { state: DiscoveryState },
+    NamespaceDiscovery {
+        state: DiscoveryState,
+    },
     SendMessage,
     CreateQueue,
     CreateTopic,
