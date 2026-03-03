@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::Duration;
 
 use crate::app::{ActiveModal, App, DiscoveryState, FocusPanel, MessageTab};
@@ -9,6 +9,12 @@ use crate::client::models::EntityType;
 pub fn handle_events(app: &mut App) -> anyhow::Result<bool> {
     if event::poll(Duration::from_millis(100))? {
         if let Event::Key(key) = event::read()? {
+            // On Windows, crossterm emits both Press and Release events.
+            // Only handle Press to avoid processing each keystroke twice.
+            if key.kind != KeyEventKind::Press {
+                return Ok(app.running);
+            }
+
             // If a background operation is running, Esc cancels it
             if app.bg_running && key.code == KeyCode::Esc {
                 app.cancel_bg();
