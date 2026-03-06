@@ -45,7 +45,6 @@ pub struct DiscoveredNamespace {
     pub fqdn: String,
     pub name: String,
     pub subscription_name: String,
-    pub subscription_id: String,
     pub location: String,
     pub status: String,
 }
@@ -200,7 +199,7 @@ impl ResourceManagerClient {
         // Collect results
         for handle in handles {
             match handle.await {
-                Ok((sub_name, sub_id, Ok(namespaces))) => {
+                Ok((sub_name, _sub_id, Ok(namespaces))) => {
                     for ns in namespaces {
                         // Extract FQDN from serviceBusEndpoint (e.g., "https://mynamespace.servicebus.windows.net:443/")
                         let fqdn = extract_fqdn_from_endpoint(&ns.properties.service_bus_endpoint);
@@ -209,7 +208,6 @@ impl ResourceManagerClient {
                             fqdn,
                             name: ns.name,
                             subscription_name: sub_name.clone(),
-                            subscription_id: sub_id.clone(),
                             location: ns.location,
                             status: ns.properties.status,
                         });

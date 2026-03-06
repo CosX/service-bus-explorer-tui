@@ -386,7 +386,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.copy_entity_selected = 0;
                     app.copy_entity_list_state.select(Some(0));
                     app.bg_running = false;
-                    
+
                     if app.copy_dest_entities.is_empty() {
                         app.set_status("No entities found in destination namespace");
                     } else {
@@ -1007,7 +1007,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
         {
             if let Some(conn_cfg) = app.copy_dest_connection_config.clone() {
                 let tx = app.bg_tx.clone();
-                
+
                 app.bg_running = true;
                 tokio::spawn(async move {
                     match App::fetch_destination_entities(conn_cfg).await {
@@ -1015,7 +1015,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             let _ = tx.send(BgEvent::DestinationEntitiesLoaded { entities });
                         }
                         Err(e) => {
-                            let _ = tx.send(BgEvent::Failed(format!("Failed to load entities: {}", e)));
+                            let _ =
+                                tx.send(BgEvent::Failed(format!("Failed to load entities: {}", e)));
                         }
                     }
                 });
@@ -1031,15 +1032,15 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
             ) {
                 let msg = app.build_message_from_form();
                 let tx = app.bg_tx.clone();
-                
+
                 app.bg_running = true;
                 app.modal = ActiveModal::None;
                 app.set_status("Copying...");
-                
+
                 tokio::spawn(async move {
                     // Create temporary data plane client for destination
                     let dest_dp = crate::client::DataPlaneClient::new(conn_cfg);
-                    
+
                     // Send to destination
                     match dest_dp.send_message(&dest_entity, &msg).await {
                         Ok(_) => {

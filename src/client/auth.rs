@@ -123,11 +123,6 @@ impl ConnectionConfig {
         }
     }
 
-    /// Returns `true` if using Azure AD authentication.
-    pub fn is_azure_ad(&self) -> bool {
-        matches!(self.auth_mode, AuthMode::AzureAd { .. })
-    }
-
     /// Generate a SAS token for the given resource URI, valid for `validity_secs`.
     fn generate_sas_token(
         key_name: &str,

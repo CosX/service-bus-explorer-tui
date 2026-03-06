@@ -101,8 +101,14 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
         ActiveModal::CopySelectConnection => render_copy_select_connection(frame, app),
         ActiveModal::CopySelectEntity => render_copy_select_entity(frame, app),
         ActiveModal::CopyEditMessage => {
-            let dest = app.copy_destination_entity.as_deref().unwrap_or("destination");
-            let conn = app.copy_dest_connection_name.as_deref().unwrap_or("connection");
+            let dest = app
+                .copy_destination_entity
+                .as_deref()
+                .unwrap_or("destination");
+            let conn = app
+                .copy_dest_connection_name
+                .as_deref()
+                .unwrap_or("connection");
             render_form(
                 frame,
                 app,
@@ -1072,16 +1078,18 @@ fn render_copy_select_connection(frame: &mut Frame, app: &mut App) {
             } else {
                 conn.name.clone()
             };
-            ListItem::new(Line::from(Span::raw(
-                format!("  {} ({})", display_name, auth_type),
-            )))
+            ListItem::new(Line::from(Span::raw(format!(
+                "  {} ({})",
+                display_name, auth_type
+            ))))
         })
         .collect();
 
     let list = List::new(items)
         .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White).bold());
-    
-    app.copy_connection_list_state.select(Some(app.input_field_index));
+
+    app.copy_connection_list_state
+        .select(Some(app.input_field_index));
     frame.render_stateful_widget(list, layout[1], &mut app.copy_connection_list_state);
 
     // Footer hints
@@ -1146,7 +1154,7 @@ fn render_copy_select_entity(frame: &mut Frame, app: &mut App) {
     // Entity list
     // Use copy_dest_entities from app state
     let has_entities = !app.copy_dest_entities.is_empty();
-    
+
     if !has_entities {
         let loading = Paragraph::new("Loading entities...")
             .style(Style::default().fg(Color::DarkGray))
@@ -1156,7 +1164,7 @@ fn render_copy_select_entity(frame: &mut Frame, app: &mut App) {
         // Render entity list with type icons
         // Use copy_dest_entities from app state
         use crate::client::models::EntityType;
-        
+
         let items: Vec<ListItem> = app
             .copy_dest_entities
             .iter()
@@ -1166,9 +1174,7 @@ fn render_copy_select_entity(frame: &mut Frame, app: &mut App) {
                     EntityType::Topic => "📢",
                     _ => "",
                 };
-                ListItem::new(Line::from(Span::raw(
-                    format!("  {} {}", icon, path),
-                )))
+                ListItem::new(Line::from(Span::raw(format!("  {} {}", icon, path))))
             })
             .collect();
 
@@ -1180,8 +1186,9 @@ fn render_copy_select_entity(frame: &mut Frame, app: &mut App) {
         } else {
             let list = List::new(items)
                 .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White).bold());
-            
-            app.copy_entity_list_state.select(Some(app.copy_entity_selected));
+
+            app.copy_entity_list_state
+                .select(Some(app.copy_entity_selected));
             frame.render_stateful_widget(list, layout[1], &mut app.copy_entity_list_state);
         }
     }

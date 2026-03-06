@@ -97,33 +97,6 @@ pub struct SubscriptionRuntimeInfo {
     pub accessed_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct RuleDescription {
-    pub name: String,
-    pub filter: RuleFilter,
-    pub action: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[allow(clippy::enum_variant_names)]
-pub enum RuleFilter {
-    #[default]
-    TrueFilter,
-    SqlFilter {
-        expression: String,
-    },
-    CorrelationFilter {
-        correlation_id: Option<String>,
-        message_id: Option<String>,
-        to: Option<String>,
-        reply_to: Option<String>,
-        label: Option<String>,
-        session_id: Option<String>,
-        content_type: Option<String>,
-        properties: Vec<(String, String)>,
-    },
-}
-
 // ──────────────────────────── Message Models ────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,6 +222,7 @@ pub enum EntityType {
     Topic,
     Subscription,
     SubscriptionFolder,
+    #[allow(dead_code)]
     DeadLetterQueue,
 }
 

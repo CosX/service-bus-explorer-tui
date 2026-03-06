@@ -154,7 +154,6 @@ pub struct App {
     pub tree: Option<TreeNode>,
     pub flat_nodes: Vec<FlatNode>,
     pub tree_selected: usize,
-    pub tree_filter: String,
 
     // Detail
     pub detail_view: DetailView,
@@ -234,7 +233,6 @@ impl App {
             tree: None,
             flat_nodes: Vec::new(),
             tree_selected: 0,
-            tree_filter: String::new(),
             detail_view: DetailView::None,
             message_tab: MessageTab::Messages,
             messages: Vec::new(),
@@ -355,34 +353,6 @@ impl App {
         self.set_status("Disconnected. Press 'c' to connect, '?' for help");
     }
 
-    /// Refresh the entity tree from the management API.
-    ///
-    /// Fetches entity lists only (queues, topics, subscriptions). Runtime info
-    /// (message counts) is loaded lazily when a node is selected in the detail
-    /// panel — this avoids an O(N) sequential HTTP round trip per entity.
-    pub async fn refresh_tree(&mut self) -> crate::client::Result<()> {
-        let mgmt = self
-            .management
-            .as_ref()
-            .ok_or_else(|| crate::client::ServiceBusError::Operation("Not connected".into()))?
-            .clone();
-
-        let namespace = self
-            .connection_config
-            .as_ref()
-            .map(|c| c.namespace.clone())
-            .unwrap_or_else(|| "Namespace".to_string());
-
-        let (tree, flat_nodes) = build_tree(mgmt, namespace).await?;
-        self.flat_nodes = flat_nodes;
-        self.tree = Some(tree);
-        if self.tree_selected >= self.flat_nodes.len() {
-            self.tree_selected = 0;
-        }
-
-        Ok(())
-    }
-
     /// Rebuild the flat node list from the tree (e.g., after expand/collapse).
     pub fn rebuild_flat_nodes(&mut self) {
         if let Some(ref tree) = self.tree {
@@ -433,17 +403,6 @@ impl App {
         self.input_field_index = 0;
         self.form_cursor = 0;
         self.modal = ActiveModal::SendMessage;
-    }
-
-    /// Initialize the edit & resend form, pre-populated from a received message.
-    pub fn init_edit_resend_form(&mut self, msg: &ReceivedMessage) {
-        self.edit_source_dlq_seq = if self.message_tab == MessageTab::DeadLetter {
-            msg.broker_properties.sequence_number
-        } else {
-            None
-        };
-        self.populate_edit_fields(msg);
-        self.modal = ActiveModal::EditResend;
     }
 
     /// Enter inline WYSIWYG edit mode in the message detail view.
@@ -685,10 +644,8 @@ impl App {
         let mut entities = Vec::new();
 
         // Fetch queues and topics in parallel
-        let (queues_result, topics_result) = tokio::join!(
-            mgmt.list_queues_with_counts(),
-            mgmt.list_topics()
-        );
+        let (queues_result, topics_result) =
+            tokio::join!(mgmt.list_queues_with_counts(), mgmt.list_topics());
 
         if let Ok(queues) = queues_result {
             for (q, _, _) in queues {

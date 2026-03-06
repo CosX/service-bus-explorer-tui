@@ -258,45 +258,6 @@ impl DataPlaneClient {
         Ok(())
     }
 
-    /// Dead-letter a peek-locked message.
-    pub async fn dead_letter_message(
-        &self,
-        lock_token_uri: &str,
-        reason: Option<&str>,
-        description: Option<&str>,
-    ) -> Result<()> {
-        let token = self.config.namespace_token().await?;
-
-        let mut props = serde_json::Map::new();
-        props.insert(
-            "DeadLetterReason".into(),
-            Value::String(reason.unwrap_or("Manual dead-letter").to_string()),
-        );
-        if let Some(desc) = description {
-            props.insert(
-                "DeadLetterErrorDescription".into(),
-                Value::String(desc.to_string()),
-            );
-        }
-
-        let resp = self
-            .http
-            .put(lock_token_uri)
-            .header("Authorization", token)
-            .header("BrokerProperties", serde_json::to_string(&props).unwrap())
-            .header("Content-Length", "0")
-            .body("")
-            .send()
-            .await?;
-
-        let status = resp.status().as_u16();
-        if status >= 400 {
-            let body = resp.text().await?;
-            return Err(ServiceBusError::Api { status, body });
-        }
-        Ok(())
-    }
-
     // ────────── Single-message removal ──────────
 
     /// Remove a specific message from the DLQ by sequence number.

@@ -1,5 +1,4 @@
 use reqwest::Client;
-use serde::Deserialize;
 
 use super::auth::ConnectionConfig;
 use super::error::{Result, ServiceBusError};
@@ -10,205 +9,6 @@ use super::models::*;
 pub struct ManagementClient {
     config: ConnectionConfig,
     http: Client,
-}
-
-// ──────────────────────────── ATOM XML types ────────────────────────────
-// These are internal deserialization structs for the ATOM feed responses.
-
-#[derive(Debug, Deserialize)]
-struct AtomFeed {
-    #[serde(rename = "entry", default)]
-    entries: Vec<AtomEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AtomEntry {
-    title: Option<AtomText>,
-    content: Option<AtomContent>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AtomText {
-    #[serde(rename = "$value", default)]
-    value: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct AtomContent {
-    #[serde(rename = "QueueDescription")]
-    queue_description: Option<AtomQueueDescription>,
-    #[serde(rename = "TopicDescription")]
-    topic_description: Option<AtomTopicDescription>,
-    #[serde(rename = "SubscriptionDescription")]
-    subscription_description: Option<AtomSubscriptionDescription>,
-    #[serde(rename = "RuleDescription")]
-    rule_description: Option<AtomRuleDescription>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(default)]
-struct AtomQueueDescription {
-    #[serde(rename = "LockDuration")]
-    lock_duration: Option<String>,
-    #[serde(rename = "MaxSizeInMegabytes")]
-    max_size_in_megabytes: Option<i64>,
-    #[serde(rename = "RequiresDuplicateDetection")]
-    requires_duplicate_detection: Option<bool>,
-    #[serde(rename = "RequiresSession")]
-    requires_session: Option<bool>,
-    #[serde(rename = "DefaultMessageTimeToLive")]
-    default_message_time_to_live: Option<String>,
-    #[serde(rename = "DeadLetteringOnMessageExpiration")]
-    dead_lettering_on_message_expiration: Option<bool>,
-    #[serde(rename = "DuplicateDetectionHistoryTimeWindow")]
-    duplicate_detection_history_time_window: Option<String>,
-    #[serde(rename = "MaxDeliveryCount")]
-    max_delivery_count: Option<i32>,
-    #[serde(rename = "EnableBatchedOperations")]
-    enable_batched_operations: Option<bool>,
-    #[serde(rename = "Status")]
-    status: Option<String>,
-    #[serde(rename = "ForwardTo")]
-    forward_to: Option<String>,
-    #[serde(rename = "ForwardDeadLetteredMessagesTo")]
-    forward_dead_lettered_messages_to: Option<String>,
-    #[serde(rename = "AutoDeleteOnIdle")]
-    auto_delete_on_idle: Option<String>,
-    #[serde(rename = "EnablePartitioning")]
-    enable_partitioning: Option<bool>,
-    #[serde(rename = "UserMetadata")]
-    user_metadata: Option<String>,
-    // Runtime info fields (returned in same description)
-    #[serde(rename = "MessageCount")]
-    message_count: Option<i64>,
-    #[serde(rename = "SizeInBytes")]
-    size_in_bytes: Option<i64>,
-    #[serde(rename = "CreatedAt")]
-    created_at: Option<String>,
-    #[serde(rename = "UpdatedAt")]
-    updated_at: Option<String>,
-    #[serde(rename = "AccessedAt")]
-    accessed_at: Option<String>,
-    #[serde(rename = "CountDetails")]
-    count_details: Option<AtomCountDetails>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(default)]
-struct AtomTopicDescription {
-    #[serde(rename = "MaxSizeInMegabytes")]
-    max_size_in_megabytes: Option<i64>,
-    #[serde(rename = "DefaultMessageTimeToLive")]
-    default_message_time_to_live: Option<String>,
-    #[serde(rename = "RequiresDuplicateDetection")]
-    requires_duplicate_detection: Option<bool>,
-    #[serde(rename = "DuplicateDetectionHistoryTimeWindow")]
-    duplicate_detection_history_time_window: Option<String>,
-    #[serde(rename = "EnableBatchedOperations")]
-    enable_batched_operations: Option<bool>,
-    #[serde(rename = "Status")]
-    status: Option<String>,
-    #[serde(rename = "SupportOrdering")]
-    support_ordering: Option<bool>,
-    #[serde(rename = "AutoDeleteOnIdle")]
-    auto_delete_on_idle: Option<String>,
-    #[serde(rename = "EnablePartitioning")]
-    enable_partitioning: Option<bool>,
-    #[serde(rename = "UserMetadata")]
-    user_metadata: Option<String>,
-    #[serde(rename = "SubscriptionCount")]
-    subscription_count: Option<i64>,
-    #[serde(rename = "SizeInBytes")]
-    size_in_bytes: Option<i64>,
-    #[serde(rename = "CreatedAt")]
-    created_at: Option<String>,
-    #[serde(rename = "UpdatedAt")]
-    updated_at: Option<String>,
-    #[serde(rename = "AccessedAt")]
-    accessed_at: Option<String>,
-    #[serde(rename = "CountDetails")]
-    count_details: Option<AtomCountDetails>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(default)]
-struct AtomSubscriptionDescription {
-    #[serde(rename = "LockDuration")]
-    lock_duration: Option<String>,
-    #[serde(rename = "RequiresSession")]
-    requires_session: Option<bool>,
-    #[serde(rename = "DefaultMessageTimeToLive")]
-    default_message_time_to_live: Option<String>,
-    #[serde(rename = "DeadLetteringOnMessageExpiration")]
-    dead_lettering_on_message_expiration: Option<bool>,
-    #[serde(rename = "DeadLetteringOnFilterEvaluationExceptions")]
-    dead_lettering_on_filter_evaluation_exceptions: Option<bool>,
-    #[serde(rename = "MaxDeliveryCount")]
-    max_delivery_count: Option<i32>,
-    #[serde(rename = "EnableBatchedOperations")]
-    enable_batched_operations: Option<bool>,
-    #[serde(rename = "Status")]
-    status: Option<String>,
-    #[serde(rename = "ForwardTo")]
-    forward_to: Option<String>,
-    #[serde(rename = "ForwardDeadLetteredMessagesTo")]
-    forward_dead_lettered_messages_to: Option<String>,
-    #[serde(rename = "AutoDeleteOnIdle")]
-    auto_delete_on_idle: Option<String>,
-    #[serde(rename = "UserMetadata")]
-    user_metadata: Option<String>,
-    #[serde(rename = "MessageCount")]
-    message_count: Option<i64>,
-    #[serde(rename = "CreatedAt")]
-    created_at: Option<String>,
-    #[serde(rename = "UpdatedAt")]
-    updated_at: Option<String>,
-    #[serde(rename = "AccessedAt")]
-    accessed_at: Option<String>,
-    #[serde(rename = "CountDetails")]
-    count_details: Option<AtomCountDetails>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(default)]
-struct AtomCountDetails {
-    #[serde(rename = "ActiveMessageCount")]
-    active_message_count: Option<i64>,
-    #[serde(rename = "DeadLetterMessageCount")]
-    dead_letter_message_count: Option<i64>,
-    #[serde(rename = "ScheduledMessageCount")]
-    scheduled_message_count: Option<i64>,
-    #[serde(rename = "TransferMessageCount")]
-    transfer_message_count: Option<i64>,
-    #[serde(rename = "TransferDeadLetterMessageCount")]
-    transfer_dead_letter_message_count: Option<i64>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct AtomRuleDescription {
-    #[serde(rename = "Filter")]
-    filter: Option<AtomRuleFilter>,
-    #[serde(rename = "Action")]
-    action: Option<AtomRuleAction>,
-    #[serde(rename = "Name")]
-    name: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct AtomRuleFilter {
-    #[serde(rename = "SqlExpression")]
-    sql_expression: Option<String>,
-    #[serde(rename = "CorrelationId")]
-    correlation_id: Option<String>,
-    // Type hint from the xsi:type attribute
-    #[serde(rename = "@type", default)]
-    filter_type: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct AtomRuleAction {
-    #[serde(rename = "SqlExpression")]
-    sql_expression: Option<String>,
 }
 
 // ──────────────────────────── ATOM XML building ────────────────────────────
@@ -467,11 +267,6 @@ impl ManagementClient {
 
     // ────────── Queues ──────────
 
-    pub async fn list_queues(&self) -> Result<Vec<QueueDescription>> {
-        let xml = self.get_atom("$Resources/Queues").await?;
-        parse_queue_feed(&xml)
-    }
-
     /// List queues with (active_message_count, dead_letter_message_count) from the same feed.
     pub async fn list_queues_with_counts(&self) -> Result<Vec<(QueueDescription, i64, i64)>> {
         let xml = self.get_atom("$Resources/Queues").await?;
@@ -489,13 +284,6 @@ impl ManagementClient {
     }
 
     pub async fn create_queue(&self, desc: &QueueDescription) -> Result<QueueDescription> {
-        let inner = queue_description_xml(desc);
-        let body = wrap_atom_entry(&inner);
-        let xml = self.put_atom(&desc.name, &body).await?;
-        parse_single_queue(&xml)
-    }
-
-    pub async fn update_queue(&self, desc: &QueueDescription) -> Result<QueueDescription> {
         let inner = queue_description_xml(desc);
         let body = wrap_atom_entry(&inner);
         let xml = self.put_atom(&desc.name, &body).await?;
@@ -524,13 +312,6 @@ impl ManagementClient {
     }
 
     pub async fn create_topic(&self, desc: &TopicDescription) -> Result<TopicDescription> {
-        let inner = topic_description_xml(desc);
-        let body = wrap_atom_entry(&inner);
-        let xml = self.put_atom(&desc.name, &body).await?;
-        parse_single_topic(&xml)
-    }
-
-    pub async fn update_topic(&self, desc: &TopicDescription) -> Result<TopicDescription> {
         let inner = topic_description_xml(desc);
         let body = wrap_atom_entry(&inner);
         let xml = self.put_atom(&desc.name, &body).await?;
@@ -597,46 +378,9 @@ impl ManagementClient {
         parse_single_subscription(&desc.topic_name, &desc.name, &xml)
     }
 
-    pub async fn update_subscription(
-        &self,
-        desc: &SubscriptionDescription,
-    ) -> Result<SubscriptionDescription> {
-        let inner = subscription_description_xml(desc);
-        let body = wrap_atom_entry(&inner);
-        let path = format!("{}/Subscriptions/{}", desc.topic_name, desc.name);
-        let xml = self.put_atom(&path, &body).await?;
-        parse_single_subscription(&desc.topic_name, &desc.name, &xml)
-    }
-
     pub async fn delete_subscription(&self, topic_name: &str, sub_name: &str) -> Result<()> {
         self.delete_entity(&format!("{}/Subscriptions/{}", topic_name, sub_name))
             .await
-    }
-
-    // ────────── Rules ──────────
-
-    pub async fn list_rules(
-        &self,
-        topic_name: &str,
-        sub_name: &str,
-    ) -> Result<Vec<RuleDescription>> {
-        let xml = self
-            .get_atom(&format!("{}/Subscriptions/{}/Rules", topic_name, sub_name))
-            .await?;
-        parse_rule_feed(&xml)
-    }
-
-    pub async fn delete_rule(
-        &self,
-        topic_name: &str,
-        sub_name: &str,
-        rule_name: &str,
-    ) -> Result<()> {
-        self.delete_entity(&format!(
-            "{}/Subscriptions/{}/Rules/{}",
-            topic_name, sub_name, rule_name
-        ))
-        .await
     }
 }
 
@@ -787,13 +531,6 @@ fn parse_queue_from_entry(entry_xml: &str) -> QueueDescription {
         enable_partitioning: parse_optional_bool(entry_xml, "EnablePartitioning"),
         user_metadata: extract_element_value(entry_xml, "UserMetadata"),
     }
-}
-
-fn parse_queue_feed(xml: &str) -> Result<Vec<QueueDescription>> {
-    Ok(extract_entries(xml)
-        .into_iter()
-        .map(|e| parse_queue_from_entry(&e))
-        .collect())
 }
 
 fn parse_queue_feed_with_counts(xml: &str) -> Result<Vec<(QueueDescription, i64, i64)>> {
@@ -954,28 +691,4 @@ fn parse_subscription_runtime_info(
         updated_at: extract_element_value(xml, "UpdatedAt"),
         accessed_at: extract_element_value(xml, "AccessedAt"),
     })
-}
-
-fn parse_rule_feed(xml: &str) -> Result<Vec<RuleDescription>> {
-    Ok(extract_entries(xml)
-        .into_iter()
-        .map(|e| {
-            let name = extract_title(&e);
-            let filter = if let Some(sql) = extract_element_value(&e, "SqlExpression") {
-                if sql == "1=1" {
-                    RuleFilter::TrueFilter
-                } else {
-                    RuleFilter::SqlFilter { expression: sql }
-                }
-            } else {
-                RuleFilter::TrueFilter
-            };
-            RuleDescription {
-                name,
-                filter,
-                action: extract_element(&e, "Action")
-                    .and_then(|a| extract_element_value(&a, "SqlExpression")),
-            }
-        })
-        .collect())
 }
