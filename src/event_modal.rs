@@ -4,6 +4,61 @@ use crate::app::{ActiveModal, App, DiscoveryState};
 use crate::client::entity_path;
 use crate::client::models::EntityType;
 
+fn move_selection_up(selected: &mut usize) {
+    if *selected > 0 {
+        *selected -= 1;
+    }
+}
+
+fn move_selection_down(selected: &mut usize, len: usize) {
+    if *selected + 1 < len {
+        *selected += 1;
+    }
+}
+
+fn handle_single_line_input(
+    input: &mut String,
+    cursor: &mut usize,
+    key: KeyEvent,
+    allow_char: impl Fn(char) -> bool,
+) -> bool {
+    match key.code {
+        KeyCode::Char(c) if allow_char(c) => {
+            input.insert(*cursor, c);
+            *cursor += 1;
+            true
+        }
+        KeyCode::Backspace => {
+            if *cursor > 0 {
+                *cursor -= 1;
+                input.remove(*cursor);
+            }
+            true
+        }
+        KeyCode::Left => {
+            if *cursor > 0 {
+                *cursor -= 1;
+            }
+            true
+        }
+        KeyCode::Right => {
+            if *cursor < input.len() {
+                *cursor += 1;
+            }
+            true
+        }
+        KeyCode::Home => {
+            *cursor = 0;
+            true
+        }
+        KeyCode::End => {
+            *cursor = input.len();
+            true
+        }
+        _ => false,
+    }
+}
+
 pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
     match &app.modal {
         ActiveModal::Help => {
@@ -32,14 +87,13 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
             }
             DiscoveryState::List => match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
-                    if app.namespace_list_state > 0 {
-                        app.namespace_list_state -= 1;
-                    }
+                    move_selection_up(&mut app.namespace_list_state);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if app.namespace_list_state + 1 < app.discovered_namespaces.len() {
-                        app.namespace_list_state += 1;
-                    }
+                    move_selection_down(
+                        &mut app.namespace_list_state,
+                        app.discovered_namespaces.len(),
+                    );
                 }
                 KeyCode::Enter => {
                     if let Some(ns) = app
@@ -112,28 +166,6 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
             KeyCode::Esc => {
                 app.modal = ActiveModal::None;
             }
-            KeyCode::Char(c) => {
-                app.input_buffer.insert(app.input_cursor, c);
-                app.input_cursor += 1;
-            }
-            KeyCode::Backspace => {
-                if app.input_cursor > 0 {
-                    app.input_cursor -= 1;
-                    app.input_buffer.remove(app.input_cursor);
-                }
-            }
-            KeyCode::Left => {
-                if app.input_cursor > 0 {
-                    app.input_cursor -= 1;
-                }
-            }
-            KeyCode::Right => {
-                if app.input_cursor < app.input_buffer.len() {
-                    app.input_cursor += 1;
-                }
-            }
-            KeyCode::Home => app.input_cursor = 0,
-            KeyCode::End => app.input_cursor = app.input_buffer.len(),
             _ => {}
         },
         ActiveModal::ConfirmDelete(_) => match key.code {
@@ -180,28 +212,6 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
             KeyCode::Esc => {
                 app.modal = ActiveModal::None;
             }
-            KeyCode::Char(c) if c.is_ascii_digit() => {
-                app.input_buffer.insert(app.input_cursor, c);
-                app.input_cursor += 1;
-            }
-            KeyCode::Backspace => {
-                if app.input_cursor > 0 {
-                    app.input_cursor -= 1;
-                    app.input_buffer.remove(app.input_cursor);
-                }
-            }
-            KeyCode::Left => {
-                if app.input_cursor > 0 {
-                    app.input_cursor -= 1;
-                }
-            }
-            KeyCode::Right => {
-                if app.input_cursor < app.input_buffer.len() {
-                    app.input_cursor += 1;
-                }
-            }
-            KeyCode::Home => app.input_cursor = 0,
-            KeyCode::End => app.input_cursor = app.input_buffer.len(),
             _ => {}
         },
         ActiveModal::ClearOptions { .. } => match key.code {
@@ -229,14 +239,10 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                 app.modal = ActiveModal::ConnectionModeSelect;
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if app.input_field_index > 0 {
-                    app.input_field_index -= 1;
-                }
+                move_selection_up(&mut app.input_field_index);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if app.input_field_index + 1 < app.config.connections.len() {
-                    app.input_field_index += 1;
-                }
+                move_selection_down(&mut app.input_field_index, app.config.connections.len());
             }
             KeyCode::Enter => {
                 if let Some(conn) = app.config.connections.get(app.input_field_index) {
@@ -329,28 +335,6 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                     }
                 }
             }
-            KeyCode::Char(c) => {
-                app.input_buffer.insert(app.input_cursor, c);
-                app.input_cursor += 1;
-            }
-            KeyCode::Backspace => {
-                if app.input_cursor > 0 {
-                    app.input_cursor -= 1;
-                    app.input_buffer.remove(app.input_cursor);
-                }
-            }
-            KeyCode::Left => {
-                if app.input_cursor > 0 {
-                    app.input_cursor -= 1;
-                }
-            }
-            KeyCode::Right => {
-                if app.input_cursor < app.input_buffer.len() {
-                    app.input_cursor += 1;
-                }
-            }
-            KeyCode::Home => app.input_cursor = 0,
-            KeyCode::End => app.input_cursor = app.input_buffer.len(),
             _ => {}
         },
         ActiveModal::CopySelectConnection => match key.code {
@@ -360,32 +344,24 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                 app.copy_source_entity = None;
             }
             KeyCode::Up => {
-                if app.input_field_index > 0 {
-                    app.input_field_index -= 1;
-                    app.copy_connection_list_state
-                        .select(Some(app.input_field_index));
-                }
+                move_selection_up(&mut app.input_field_index);
+                app.copy_connection_list_state
+                    .select(Some(app.input_field_index));
             }
             KeyCode::Down => {
-                if app.input_field_index + 1 < app.config.connections.len() {
-                    app.input_field_index += 1;
-                    app.copy_connection_list_state
-                        .select(Some(app.input_field_index));
-                }
+                move_selection_down(&mut app.input_field_index, app.config.connections.len());
+                app.copy_connection_list_state
+                    .select(Some(app.input_field_index));
             }
             KeyCode::Char('k') if key.modifiers.is_empty() => {
-                if app.input_field_index > 0 {
-                    app.input_field_index -= 1;
-                    app.copy_connection_list_state
-                        .select(Some(app.input_field_index));
-                }
+                move_selection_up(&mut app.input_field_index);
+                app.copy_connection_list_state
+                    .select(Some(app.input_field_index));
             }
             KeyCode::Char('j') if key.modifiers.is_empty() => {
-                if app.input_field_index + 1 < app.config.connections.len() {
-                    app.input_field_index += 1;
-                    app.copy_connection_list_state
-                        .select(Some(app.input_field_index));
-                }
+                move_selection_down(&mut app.input_field_index, app.config.connections.len());
+                app.copy_connection_list_state
+                    .select(Some(app.input_field_index));
             }
             KeyCode::Enter => {
                 if let Some(conn) = app.config.connections.get(app.input_field_index) {
@@ -443,32 +419,24 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                 app.copy_dest_connection_config = None;
             }
             KeyCode::Up => {
-                if app.copy_entity_selected > 0 {
-                    app.copy_entity_selected -= 1;
-                    app.copy_entity_list_state
-                        .select(Some(app.copy_entity_selected));
-                }
+                move_selection_up(&mut app.copy_entity_selected);
+                app.copy_entity_list_state
+                    .select(Some(app.copy_entity_selected));
             }
             KeyCode::Down => {
-                if app.copy_entity_selected + 1 < app.copy_dest_entities.len() {
-                    app.copy_entity_selected += 1;
-                    app.copy_entity_list_state
-                        .select(Some(app.copy_entity_selected));
-                }
+                move_selection_down(&mut app.copy_entity_selected, app.copy_dest_entities.len());
+                app.copy_entity_list_state
+                    .select(Some(app.copy_entity_selected));
             }
             KeyCode::Char('k') if key.modifiers.is_empty() => {
-                if app.copy_entity_selected > 0 {
-                    app.copy_entity_selected -= 1;
-                    app.copy_entity_list_state
-                        .select(Some(app.copy_entity_selected));
-                }
+                move_selection_up(&mut app.copy_entity_selected);
+                app.copy_entity_list_state
+                    .select(Some(app.copy_entity_selected));
             }
             KeyCode::Char('j') if key.modifiers.is_empty() => {
-                if app.copy_entity_selected + 1 < app.copy_dest_entities.len() {
-                    app.copy_entity_selected += 1;
-                    app.copy_entity_list_state
-                        .select(Some(app.copy_entity_selected));
-                }
+                move_selection_down(&mut app.copy_entity_selected, app.copy_dest_entities.len());
+                app.copy_entity_list_state
+                    .select(Some(app.copy_entity_selected));
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 if let Some(ref src_entity) = app.copy_source_entity {
@@ -510,6 +478,28 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
             handle_form_input(app, key);
         }
         ActiveModal::None => {}
+    }
+
+    match &app.modal {
+        ActiveModal::AzureAdNamespaceInput => {
+            let _ =
+                handle_single_line_input(&mut app.input_buffer, &mut app.input_cursor, key, |_| {
+                    true
+                });
+        }
+        ActiveModal::PeekCountInput => {
+            let _ =
+                handle_single_line_input(&mut app.input_buffer, &mut app.input_cursor, key, |c| {
+                    c.is_ascii_digit()
+                });
+        }
+        ActiveModal::ConnectionInput => {
+            let _ =
+                handle_single_line_input(&mut app.input_buffer, &mut app.input_cursor, key, |_| {
+                    true
+                });
+        }
+        _ => {}
     }
 }
 

@@ -5,6 +5,8 @@ use crate::app::{ActiveModal, App, FocusPanel, MessageTab};
 use crate::client::models::EntityType;
 use crate::event_modal;
 
+const BG_BUSY_MSG: &str = "A background operation is in progress...";
+
 /// Poll for input events and process them against app state.
 /// Returns true if the app should continue running.
 pub fn handle_events(app: &mut App) -> anyhow::Result<bool> {
@@ -102,14 +104,10 @@ pub fn handle_events(app: &mut App) -> anyhow::Result<bool> {
 fn handle_tree_input(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
-            if app.tree_selected > 0 {
-                app.tree_selected -= 1;
-            }
+            move_selection_up(&mut app.tree_selected);
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if app.tree_selected + 1 < app.flat_nodes.len() {
-                app.tree_selected += 1;
-            }
+            move_selection_down(&mut app.tree_selected, app.flat_nodes.len());
         }
         KeyCode::Home | KeyCode::Char('g') => {
             app.tree_selected = 0;
@@ -139,51 +137,47 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
         }
         // 'r' = refresh (handled async in main loop via flag)
         KeyCode::Char('r') | KeyCode::F(5) => {
-            if app.bg_running {
-                app.set_status("A background operation is in progress...");
-            } else {
+            if !block_if_bg_running(app, BG_BUSY_MSG) {
                 app.set_status("Refreshing...");
                 // Trigger async refresh — handled in main loop
             }
         }
         // 's' = send message to selected entity
         KeyCode::Char('s') => {
-            if app.bg_running {
-                app.set_status("A background operation is in progress...");
-            } else if let Some((_, entity_type)) = app.selected_entity() {
-                match entity_type {
-                    EntityType::Queue | EntityType::Topic => {
-                        app.init_send_form();
-                    }
-                    _ => {
-                        app.set_status("Select a queue or topic to send messages");
+            if !block_if_bg_running(app, BG_BUSY_MSG) {
+                if let Some((_, entity_type)) = app.selected_entity() {
+                    match entity_type {
+                        EntityType::Queue | EntityType::Topic => {
+                            app.init_send_form();
+                        }
+                        _ => {
+                            app.set_status("Select a queue or topic to send messages");
+                        }
                     }
                 }
             }
         }
         // 'p' = peek messages — prompt for count
         KeyCode::Char('p') => {
-            if app.bg_running {
-                app.set_status("A background operation is in progress...");
-            } else if let Some((_, entity_type)) = app.selected_entity() {
-                match entity_type {
-                    EntityType::Queue | EntityType::Subscription => {
-                        app.input_buffer = app.config.settings.peek_count.to_string();
-                        app.input_cursor = app.input_buffer.len();
-                        app.modal = ActiveModal::PeekCountInput;
-                        app.peek_dlq = false;
-                    }
-                    _ => {
-                        app.set_status("Select a queue or subscription to peek messages");
+            if !block_if_bg_running(app, BG_BUSY_MSG) {
+                if let Some((_, entity_type)) = app.selected_entity() {
+                    match entity_type {
+                        EntityType::Queue | EntityType::Subscription => {
+                            app.input_buffer = app.config.settings.peek_count.to_string();
+                            app.input_cursor = app.input_buffer.len();
+                            app.modal = ActiveModal::PeekCountInput;
+                            app.peek_dlq = false;
+                        }
+                        _ => {
+                            app.set_status("Select a queue or subscription to peek messages");
+                        }
                     }
                 }
             }
         }
         // 'n' = new entity
         KeyCode::Char('n') => {
-            if app.bg_running {
-                app.set_status("A background operation is in progress...");
-            } else if !app.flat_nodes.is_empty() {
+            if !block_if_bg_running(app, BG_BUSY_MSG) && !app.flat_nodes.is_empty() {
                 let node = &app.flat_nodes[app.tree_selected];
                 match node.entity_type {
                     EntityType::QueueFolder | EntityType::Queue => {
@@ -207,67 +201,70 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
         }
         // 'x' = delete selected entity
         KeyCode::Char('x') => {
-            if app.bg_running {
-                app.set_status("A background operation is in progress...");
-            } else if let Some((
-                path,
-                entity_type @ (EntityType::Queue | EntityType::Topic | EntityType::Subscription),
-            )) = app.selected_entity()
-            {
-                let _ = entity_type;
-                let path = path.to_string();
-                app.modal = ActiveModal::ConfirmDelete(path);
-                app.input_buffer.clear();
+            if !block_if_bg_running(app, BG_BUSY_MSG) {
+                if let Some((
+                    path,
+                    entity_type
+                    @ (EntityType::Queue | EntityType::Topic | EntityType::Subscription),
+                )) = app.selected_entity()
+                {
+                    let _ = entity_type;
+                    let path = path.to_string();
+                    app.modal = ActiveModal::ConfirmDelete(path);
+                    app.input_buffer.clear();
+                }
             }
         }
         // 'd' = peek dead-letter queue for selected entity
         KeyCode::Char('d') => {
-            if app.bg_running {
-                app.set_status("A background operation is in progress...");
-            } else if let Some((_, entity_type)) = app.selected_entity() {
-                match entity_type {
-                    EntityType::Queue | EntityType::Subscription | EntityType::Topic => {
-                        app.input_buffer = app.config.settings.peek_count.to_string();
-                        app.input_cursor = app.input_buffer.len();
-                        app.modal = ActiveModal::PeekCountInput;
-                        app.peek_dlq = true;
-                    }
-                    _ => {
-                        app.set_status("Select a queue, topic, or subscription to peek its DLQ");
+            if !block_if_bg_running(app, BG_BUSY_MSG) {
+                if let Some((_, entity_type)) = app.selected_entity() {
+                    match entity_type {
+                        EntityType::Queue | EntityType::Subscription | EntityType::Topic => {
+                            app.input_buffer = app.config.settings.peek_count.to_string();
+                            app.input_cursor = app.input_buffer.len();
+                            app.modal = ActiveModal::PeekCountInput;
+                            app.peek_dlq = true;
+                        }
+                        _ => {
+                            app.set_status(
+                                "Select a queue, topic, or subscription to peek its DLQ",
+                            );
+                        }
                     }
                 }
             }
         }
         // 'P' (shift+p) = clear entity (choose delete or resend)
         KeyCode::Char('P') => {
-            if app.bg_running {
-                app.set_status("A background operation is in progress...");
-            } else if let Some((path, entity_type)) = app.selected_entity() {
-                match entity_type {
-                    EntityType::Queue | EntityType::Subscription | EntityType::Topic => {
-                        let entity_path = path.to_string();
-                        let is_topic = *entity_type == EntityType::Topic;
-                        app.modal = ActiveModal::ClearOptions {
-                            entity_path: entity_path.clone(),
-                            base_entity_path: entity_path,
-                            is_topic,
-                        };
-                    }
-                    _ => {
-                        app.set_status("Select a queue, topic, or subscription to clear");
+            if !block_if_bg_running(app, BG_BUSY_MSG) {
+                if let Some((path, entity_type)) = app.selected_entity() {
+                    match entity_type {
+                        EntityType::Queue | EntityType::Subscription | EntityType::Topic => {
+                            let entity_path = path.to_string();
+                            let is_topic = *entity_type == EntityType::Topic;
+                            app.modal = ActiveModal::ClearOptions {
+                                entity_path: entity_path.clone(),
+                                base_entity_path: entity_path,
+                                is_topic,
+                            };
+                        }
+                        _ => {
+                            app.set_status("Select a queue, topic, or subscription to clear");
+                        }
                     }
                 }
             }
         }
         // 'f' = edit subscription SQL filter rule
         KeyCode::Char('f') => {
-            if app.bg_running {
-                app.set_status("A background operation is in progress...");
-            } else if let Some((_, entity_type)) = app.selected_entity() {
-                if *entity_type == EntityType::Subscription {
-                    app.set_status("Loading subscription filters...");
-                } else {
-                    app.set_status("Select a subscription to edit its filter");
+            if !block_if_bg_running(app, BG_BUSY_MSG) {
+                if let Some((_, entity_type)) = app.selected_entity() {
+                    if *entity_type == EntityType::Subscription {
+                        app.set_status("Loading subscription filters...");
+                    } else {
+                        app.set_status("Select a subscription to edit its filter");
+                    }
                 }
             }
         }
@@ -307,15 +304,15 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
             // Scroll body when viewing message detail, else navigate list
             if app.selected_message_detail.is_some() {
                 app.detail_body_scroll = app.detail_body_scroll.saturating_sub(1);
-            } else if app.message_selected > 0 {
-                app.message_selected -= 1;
+            } else {
+                move_selection_up(&mut app.message_selected);
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if app.selected_message_detail.is_some() {
                 app.detail_body_scroll = app.detail_body_scroll.saturating_add(1);
-            } else if app.message_selected + 1 < len {
-                app.message_selected += 1;
+            } else {
+                move_selection_down(&mut app.message_selected, len);
             }
         }
         KeyCode::Enter => {
@@ -339,9 +336,10 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
         }
         // R = Bulk resend from DLQ back to main entity
         KeyCode::Char('R') => {
-            if app.bg_running {
-                app.set_status("A background operation is in progress...");
-            } else if app.message_tab == MessageTab::DeadLetter {
+            if block_if_bg_running(app, BG_BUSY_MSG) {
+                return;
+            }
+            if app.message_tab == MessageTab::DeadLetter {
                 if let Some((path, entity_type)) = app.selected_entity() {
                     let base_path = path.to_string();
                     match entity_type {
@@ -371,32 +369,32 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
         }
         // D = Bulk delete visible messages
         KeyCode::Char('D') => {
-            if app.bg_running {
-                app.set_status("A background operation is in progress...");
-            } else if let Some((path, entity_type)) = app.selected_entity() {
-                match entity_type {
-                    EntityType::Queue | EntityType::Subscription | EntityType::Topic => {
-                        let is_dlq = app.message_tab == MessageTab::DeadLetter;
-                        let is_topic = *entity_type == EntityType::Topic;
-                        let msgs = if is_dlq {
-                            &app.dlq_messages
-                        } else {
-                            &app.messages
-                        };
-                        let count = msgs.len() as u32;
-                        if count > 0 {
-                            app.modal = ActiveModal::ConfirmBulkDelete {
-                                entity_path: path.to_string(),
-                                count,
-                                is_dlq,
-                                is_topic,
+            if !block_if_bg_running(app, BG_BUSY_MSG) {
+                if let Some((path, entity_type)) = app.selected_entity() {
+                    match entity_type {
+                        EntityType::Queue | EntityType::Subscription | EntityType::Topic => {
+                            let is_dlq = app.message_tab == MessageTab::DeadLetter;
+                            let is_topic = *entity_type == EntityType::Topic;
+                            let msgs = if is_dlq {
+                                &app.dlq_messages
+                            } else {
+                                &app.messages
                             };
-                        } else {
-                            app.set_status("No messages to delete");
+                            let count = msgs.len() as u32;
+                            if count > 0 {
+                                app.modal = ActiveModal::ConfirmBulkDelete {
+                                    entity_path: path.to_string(),
+                                    count,
+                                    is_dlq,
+                                    is_topic,
+                                };
+                            } else {
+                                app.set_status("No messages to delete");
+                            }
                         }
-                    }
-                    _ => {
-                        app.set_status("Select a queue, topic, or subscription");
+                        _ => {
+                            app.set_status("Select a queue, topic, or subscription");
+                        }
                     }
                 }
             }
@@ -422,9 +420,7 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
         }
         // C = Copy message to different connection/entity
         KeyCode::Char('C') => {
-            if app.bg_running {
-                app.set_status("A background operation is in progress...");
-            } else {
+            if !block_if_bg_running(app, BG_BUSY_MSG) {
                 // Clone all necessary data before any mutations
                 let msg = if app.selected_message_detail.is_some() {
                     app.selected_message_detail.clone()
@@ -459,5 +455,26 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
             app.detail_body_scroll = 0;
         }
         _ => {}
+    }
+}
+
+fn block_if_bg_running(app: &mut App, message: &str) -> bool {
+    if app.bg_running {
+        app.set_status(message);
+        true
+    } else {
+        false
+    }
+}
+
+fn move_selection_up(selected: &mut usize) {
+    if *selected > 0 {
+        *selected -= 1;
+    }
+}
+
+fn move_selection_down(selected: &mut usize, len: usize) {
+    if *selected + 1 < len {
+        *selected += 1;
     }
 }

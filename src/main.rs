@@ -6,6 +6,7 @@ mod event;
 mod event_modal;
 mod ui;
 
+use std::future::Future;
 use std::io;
 
 use crossterm::{
@@ -19,6 +20,41 @@ use app::{ActiveModal, App, BgEvent, DetailView, DiscoveryState, FocusPanel, Mes
 use bulk_ops::{resend_dlq_loop, resolve_purge_paths, resolve_resend_pairs, send_path_owned};
 use client::entity_path;
 use client::models::EntityType;
+
+fn send_failed(tx: &tokio::sync::mpsc::UnboundedSender<BgEvent>, message: impl Into<String>) {
+    let _ = tx.send(BgEvent::Failed(message.into()));
+}
+
+fn send_failed_with<E: std::fmt::Display>(
+    tx: &tokio::sync::mpsc::UnboundedSender<BgEvent>,
+    context: &str,
+    err: E,
+) {
+    send_failed(tx, format!("{}: {}", context, err));
+}
+
+fn spawn_entity_create<T, Fut>(
+    tx: tokio::sync::mpsc::UnboundedSender<BgEvent>,
+    kind: &'static str,
+    name: String,
+    op: Fut,
+) where
+    Fut: Future<Output = client::Result<T>> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::spawn(async move {
+        match op.await {
+            Ok(_) => {
+                let _ = tx.send(BgEvent::EntityCreated {
+                    status: format!("{} '{}' created", kind, name),
+                });
+            }
+            Err(e) => {
+                send_failed_with(&tx, "Create failed", e);
+            }
+        }
+    });
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -318,7 +354,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             let _ = tx.send(BgEvent::TreeRefreshed { tree, flat_nodes });
                         }
                         Err(e) => {
-                            let _ = tx.send(BgEvent::Failed(format!("Refresh failed: {}", e)));
+                            send_failed_with(&tx, "Refresh failed", e);
                         }
                     }
                 });
@@ -482,10 +518,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                     }
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(BgEvent::Failed(format!(
-                                        "Failed to list subscriptions: {}",
-                                        e
-                                    )));
+                                    send_failed_with(&tx, "Failed to list subscriptions", e);
                                     return;
                                 }
                             }
@@ -515,7 +548,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                 });
                             }
                             Err(e) => {
-                                let _ = tx.send(BgEvent::Failed(format!("Peek failed: {}", e)));
+                                send_failed_with(&tx, "Peek failed", e);
                             }
                         }
                     });
@@ -553,7 +586,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                         {
                             Ok(p) => p,
                             Err(e) => {
-                                let _ = tx.send(BgEvent::Failed(e));
+                                send_failed(&tx, e);
                                 return;
                             }
                         };
@@ -600,10 +633,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                         ),
                                     });
                                 } else {
-                                    let _ = tx.send(BgEvent::Failed(format!(
-                                        "Purge failed after {} messages: {}",
-                                        count, e
-                                    )));
+                                    send_failed(
+                                        &tx,
+                                        format!("Purge failed after {} messages: {}", count, e),
+                                    );
                                 }
                                 drop(progress_tx);
                                 let _ = progress_task.await;
@@ -659,7 +692,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     {
                         Ok(p) => p,
                         Err(e) => {
-                            let _ = tx.send(BgEvent::Failed(e));
+                            send_failed(&tx, e);
                             return;
                         }
                     };
@@ -677,7 +710,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                                 let _ = tx.send(BgEvent::Cancelled { message: msg });
                             } else {
-                                let _ = tx.send(BgEvent::Failed(msg));
+                                send_failed(&tx, msg);
                             }
                         }
                     }
@@ -715,7 +748,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                 });
                             }
                             Err(e) => {
-                                let _ = tx.send(BgEvent::Failed(format!("Delete failed: {}", e)));
+                                send_failed_with(&tx, "Delete failed", e);
                             }
                         }
                     });
@@ -744,7 +777,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                 });
                             }
                             Err(e) => {
-                                let _ = tx.send(BgEvent::Failed(format!("Send failed: {}", e)));
+                                send_failed_with(&tx, "Send failed", e);
                             }
                         }
                     });
@@ -794,7 +827,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                 });
                             }
                             Err(e) => {
-                                let _ = tx.send(BgEvent::Failed(format!("Resend failed: {}", e)));
+                                send_failed_with(&tx, "Resend failed", e);
                             }
                         }
                     });
@@ -811,18 +844,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 let name = desc.name.clone();
                 app.set_status("Creating queue...");
 
-                tokio::spawn(async move {
-                    match mgmt.create_queue(&desc).await {
-                        Ok(_) => {
-                            let _ = tx.send(BgEvent::EntityCreated {
-                                status: format!("Queue '{}' created", name),
-                            });
-                        }
-                        Err(e) => {
-                            let _ = tx.send(BgEvent::Failed(format!("Create failed: {}", e)));
-                        }
-                    }
-                });
+                spawn_entity_create(
+                    tx,
+                    "Queue",
+                    name,
+                    async move { mgmt.create_queue(&desc).await },
+                );
             }
         }
 
@@ -835,18 +862,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 let name = desc.name.clone();
                 app.set_status("Creating topic...");
 
-                tokio::spawn(async move {
-                    match mgmt.create_topic(&desc).await {
-                        Ok(_) => {
-                            let _ = tx.send(BgEvent::EntityCreated {
-                                status: format!("Topic '{}' created", name),
-                            });
-                        }
-                        Err(e) => {
-                            let _ = tx.send(BgEvent::Failed(format!("Create failed: {}", e)));
-                        }
-                    }
-                });
+                spawn_entity_create(
+                    tx,
+                    "Topic",
+                    name,
+                    async move { mgmt.create_topic(&desc).await },
+                );
             }
         }
 
@@ -859,17 +880,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 let name = desc.name.clone();
                 app.set_status("Creating subscription...");
 
-                tokio::spawn(async move {
-                    match mgmt.create_subscription(&desc).await {
-                        Ok(_) => {
-                            let _ = tx.send(BgEvent::EntityCreated {
-                                status: format!("Subscription '{}' created", name),
-                            });
-                        }
-                        Err(e) => {
-                            let _ = tx.send(BgEvent::Failed(format!("Create failed: {}", e)));
-                        }
-                    }
+                spawn_entity_create(tx, "Subscription", name, async move {
+                    mgmt.create_subscription(&desc).await
                 });
             }
         }
@@ -914,10 +926,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                     });
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(BgEvent::Failed(format!(
-                                        "Failed to load subscription filters: {}",
-                                        e
-                                    )));
+                                    send_failed_with(&tx, "Failed to load subscription filters", e);
                                 }
                             }
                         });
@@ -966,10 +975,11 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                         });
                                     }
                                     Err(e) => {
-                                        let _ = tx.send(BgEvent::Failed(format!(
-                                            "Failed to update subscription filter: {}",
-                                            e
-                                        )));
+                                        send_failed_with(
+                                            &tx,
+                                            "Failed to update subscription filter",
+                                            e,
+                                        );
                                     }
                                 }
                             });
@@ -995,8 +1005,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             let _ = tx.send(BgEvent::DestinationEntitiesLoaded { entities });
                         }
                         Err(e) => {
-                            let _ =
-                                tx.send(BgEvent::Failed(format!("Failed to load entities: {}", e)));
+                            send_failed_with(&tx, "Failed to load entities", e);
                         }
                     }
                 });
@@ -1032,7 +1041,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             });
                         }
                         Err(e) => {
-                            let _ = tx.send(BgEvent::Failed(format!("Copy failed: {}", e)));
+                            send_failed_with(&tx, "Copy failed", e);
                         }
                     }
                 });
@@ -1131,7 +1140,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                         match resolve_purge_paths(mgmt.as_ref(), &path, is_topic, was_dlq).await {
                             Ok(p) => p,
                             Err(e) => {
-                                let _ = tx.send(BgEvent::Failed(e));
+                                send_failed(&tx, e);
                                 return;
                             }
                         };
@@ -1152,10 +1161,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                         ),
                                     });
                                 } else {
-                                    let _ = tx.send(BgEvent::Failed(format!(
-                                        "Purge failed after {} messages: {}",
-                                        deleted, e
-                                    )));
+                                    send_failed(
+                                        &tx,
+                                        format!("Purge failed after {} messages: {}", deleted, e),
+                                    );
                                 }
                                 return;
                             }

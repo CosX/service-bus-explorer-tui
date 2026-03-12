@@ -169,17 +169,52 @@ fn centered_rect_abs_height(percent_x: u16, height: u16, area: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn render_connection_input(frame: &mut Frame, app: &App) {
-    let area = centered_rect(70, 20, frame.area());
+fn render_popup_block(frame: &mut Frame, area: Rect, title: String, border_color: Color) -> Rect {
     frame.render_widget(Clear, area);
 
     let block = Block::default()
-        .title(" Connect — Enter Connection String ")
+        .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(border_color));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    inner
+}
+
+fn set_single_line_cursor(frame: &mut Frame, input_area: Rect, cursor: usize) {
+    let cursor_x = input_area.x + cursor as u16 + 1;
+    let cursor_y = input_area.y + 1;
+    frame.set_cursor_position((cursor_x, cursor_y));
+}
+
+fn render_shortcut_hints(frame: &mut Frame, area: Rect, shortcuts: &[(&str, &str)]) {
+    let mut spans = Vec::with_capacity(shortcuts.len() * 2);
+    for (key, text) in shortcuts {
+        spans.push(Span::styled(
+            *key,
+            Style::default().fg(Color::Yellow).bold(),
+        ));
+        spans.push(Span::styled(*text, Style::default().fg(Color::DarkGray)));
+    }
+
+    let hints = Paragraph::new(vec![Line::from(spans)]);
+    frame.render_widget(hints, area);
+}
+
+fn render_centered_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'_>>) {
+    let text = Paragraph::new(lines).alignment(Alignment::Center);
+    frame.render_widget(text, area);
+}
+
+fn render_connection_input(frame: &mut Frame, app: &App) {
+    let area = centered_rect(70, 20, frame.area());
+    let inner = render_popup_block(
+        frame,
+        area,
+        " Connect — Enter Connection String ".to_string(),
+        Color::Cyan,
+    );
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -203,23 +238,17 @@ fn render_connection_input(frame: &mut Frame, app: &App) {
         );
     frame.render_widget(input, layout[1]);
 
-    // Show cursor
-    let cursor_x = layout[1].x + app.input_cursor as u16 + 1;
-    let cursor_y = layout[1].y + 1;
-    frame.set_cursor_position((cursor_x, cursor_y));
+    set_single_line_cursor(frame, layout[1], app.input_cursor);
 }
 
 fn render_connection_list(frame: &mut Frame, app: &App) {
     let area = centered_rect(60, 50, frame.area());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title(" Saved Connections (n=new, d=delete, Enter=connect) ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_popup_block(
+        frame,
+        area,
+        " Saved Connections (n=new, d=delete, Enter=connect) ".to_string(),
+        Color::Cyan,
+    );
 
     let items: Vec<ListItem> = app
         .config
@@ -253,15 +282,12 @@ fn render_connection_list(frame: &mut Frame, app: &App) {
 
 fn render_connection_mode_select(frame: &mut Frame) {
     let area = centered_rect_abs_height(50, 9, frame.area());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title(" Connect — Choose Auth Method ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_popup_block(
+        frame,
+        area,
+        " Connect — Choose Auth Method ".to_string(),
+        Color::Cyan,
+    );
 
     let text = vec![
         Line::from(""),
@@ -287,15 +313,12 @@ fn render_connection_mode_select(frame: &mut Frame) {
 
 fn render_azure_ad_input(frame: &mut Frame, app: &App) {
     let area = centered_rect(70, 20, frame.area());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title(" Connect — Azure AD (Entra ID) ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Magenta));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_popup_block(
+        frame,
+        area,
+        " Connect — Azure AD (Entra ID) ".to_string(),
+        Color::Magenta,
+    );
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -318,22 +341,17 @@ fn render_azure_ad_input(frame: &mut Frame, app: &App) {
         );
     frame.render_widget(input, layout[1]);
 
-    let cursor_x = layout[1].x + app.input_cursor as u16 + 1;
-    let cursor_y = layout[1].y + 1;
-    frame.set_cursor_position((cursor_x, cursor_y));
+    set_single_line_cursor(frame, layout[1], app.input_cursor);
 }
 
 fn render_connection_switch(frame: &mut Frame, app: &App) {
     let area = centered_rect(50, 40, frame.area());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title(" Connection Management ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_popup_block(
+        frame,
+        area,
+        " Connection Management ".to_string(),
+        Color::Cyan,
+    );
 
     let current_conn = app.connection_name.as_deref().unwrap_or("Unknown");
 
@@ -361,8 +379,7 @@ fn render_connection_switch(frame: &mut Frame, app: &App) {
         ]),
     ];
 
-    let paragraph = Paragraph::new(text).alignment(Alignment::Center);
-    frame.render_widget(paragraph, inner);
+    render_centered_lines(frame, inner, text);
 }
 
 fn render_form(frame: &mut Frame, app: &mut App, title: &str, hint: &str) {
@@ -616,30 +633,24 @@ fn pretty_print_body(body: &str) -> String {
 
 fn render_confirm_delete(frame: &mut Frame, path: &str) {
     let area = centered_rect(50, 20, frame.area());
-    frame.render_widget(Clear, area);
+    let inner = render_popup_block(frame, area, " Confirm Delete ".to_string(), Color::Red);
 
-    let block = Block::default()
-        .title(" Confirm Delete ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    let text = Paragraph::new(vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            format!("Delete '{}'?", path),
-            Style::default().fg(Color::Red).bold(),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Press 'y' to confirm, 'n' or Esc to cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ])
-    .alignment(Alignment::Center);
-    frame.render_widget(text, inner);
+    render_centered_lines(
+        frame,
+        inner,
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("Delete '{}'{}", path, "?"),
+                Style::default().fg(Color::Red).bold(),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Press 'y' to confirm, 'n' or Esc to cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ],
+    );
 }
 
 fn truncate(s: &str, max_len: usize) -> String {
@@ -652,15 +663,7 @@ fn truncate(s: &str, max_len: usize) -> String {
 
 fn render_confirm_bulk(frame: &mut Frame, title: &str, message: &str, color: Color) {
     let area = centered_rect(55, 25, frame.area());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title(format!(" {} ", title))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(color));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_popup_block(frame, area, format!(" {} ", title), color);
 
     let mut lines = vec![Line::from("")];
     for line in message.lines() {
@@ -675,21 +678,12 @@ fn render_confirm_bulk(frame: &mut Frame, title: &str, message: &str, color: Col
         Style::default().fg(Color::DarkGray),
     )));
 
-    let text = Paragraph::new(lines).alignment(Alignment::Center);
-    frame.render_widget(text, inner);
+    render_centered_lines(frame, inner, lines);
 }
 
 fn render_peek_count_input(frame: &mut Frame, app: &App) {
     let area = centered_rect(45, 20, frame.area());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title(" Peek Messages ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_popup_block(frame, area, " Peek Messages ".to_string(), Color::Cyan);
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -720,23 +714,12 @@ fn render_peek_count_input(frame: &mut Frame, app: &App) {
         Paragraph::new("Enter to peek · Esc to cancel").style(Style::default().fg(Color::DarkGray));
     frame.render_widget(hint, layout[3]);
 
-    // Cursor
-    let cursor_x = layout[2].x + app.input_cursor as u16 + 1;
-    let cursor_y = layout[2].y + 1;
-    frame.set_cursor_position((cursor_x, cursor_y));
+    set_single_line_cursor(frame, layout[2], app.input_cursor);
 }
 
 fn render_clear_options(frame: &mut Frame, entity_path: &str) {
     let area = centered_rect(58, 35, frame.area());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title(" Clear Entity ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_popup_block(frame, area, " Clear Entity ".to_string(), Color::Yellow);
 
     let entity_display = if entity_path.len() > 40 {
         format!("...{}", &entity_path[entity_path.len() - 37..])
@@ -781,8 +764,7 @@ fn render_clear_options(frame: &mut Frame, entity_path: &str) {
         )),
     ];
 
-    let text = Paragraph::new(lines).alignment(Alignment::Center);
-    frame.render_widget(text, inner);
+    render_centered_lines(frame, inner, lines);
 }
 
 fn render_namespace_discovery(frame: &mut Frame, app: &App, state: &crate::app::DiscoveryState) {
@@ -796,15 +778,12 @@ fn render_namespace_discovery(frame: &mut Frame, app: &App, state: &crate::app::
 
 fn render_discovery_loading(frame: &mut Frame) {
     let area = centered_rect(50, 20, frame.area());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title(" Azure AD — Discovering Namespaces ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Magenta));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_popup_block(
+        frame,
+        area,
+        " Azure AD — Discovering Namespaces ".to_string(),
+        Color::Magenta,
+    );
 
     let lines = vec![
         Line::from(""),
@@ -825,21 +804,17 @@ fn render_discovery_loading(frame: &mut Frame) {
         )),
     ];
 
-    let text = Paragraph::new(lines).alignment(Alignment::Center);
-    frame.render_widget(text, inner);
+    render_centered_lines(frame, inner, lines);
 }
 
 fn render_discovery_error(frame: &mut Frame, msg: &str) {
     let area = centered_rect(60, 30, frame.area());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title(" Namespace Discovery Failed ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_popup_block(
+        frame,
+        area,
+        " Namespace Discovery Failed ".to_string(),
+        Color::Red,
+    );
 
     let mut lines = vec![
         Line::from(""),
@@ -873,21 +848,17 @@ fn render_discovery_error(frame: &mut Frame, msg: &str) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let text = Paragraph::new(lines).alignment(Alignment::Center);
-    frame.render_widget(text, inner);
+    render_centered_lines(frame, inner, lines);
 }
 
 fn render_namespace_list(frame: &mut Frame, app: &App) {
     let area = centered_rect(80, 70, frame.area());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title(" Azure AD — Select Service Bus Namespace ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Magenta));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_popup_block(
+        frame,
+        area,
+        " Azure AD — Select Service Bus Namespace ".to_string(),
+        Color::Magenta,
+    );
 
     if app.discovered_namespaces.is_empty() {
         // No namespaces found
@@ -918,8 +889,7 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
                 Style::default().fg(Color::DarkGray),
             )),
         ];
-        let text = Paragraph::new(lines).alignment(Alignment::Center);
-        frame.render_widget(text, inner);
+        render_centered_lines(frame, inner, lines);
         return;
     }
 
@@ -1027,31 +997,26 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
     let list = List::new(items);
     frame.render_widget(list, layout[1]);
 
-    // Hints
-    let hints = Paragraph::new(vec![Line::from(vec![
-        Span::styled("↑↓/j/k", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Enter", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" connect  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("m", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" manual  ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Esc", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
-    ])]);
-    frame.render_widget(hints, layout[2]);
+    render_shortcut_hints(
+        frame,
+        layout[2],
+        &[
+            ("↑↓/j/k", " navigate  "),
+            ("Enter", " connect  "),
+            ("m", " manual  "),
+            ("Esc", " cancel"),
+        ],
+    );
 }
 
 fn render_copy_select_connection(frame: &mut Frame, app: &mut App) {
     let area = centered_rect(70, 60, frame.area());
-    frame.render_widget(Clear, area);
-
-    let block = Block::default()
-        .title(" Copy Message — Select Destination Connection ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = render_popup_block(
+        frame,
+        area,
+        " Copy Message — Select Destination Connection ".to_string(),
+        Color::Cyan,
+    );
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -1098,37 +1063,32 @@ fn render_copy_select_connection(frame: &mut Frame, app: &mut App) {
         .select(Some(app.input_field_index));
     frame.render_stateful_widget(list, layout[1], &mut app.copy_connection_list_state);
 
-    // Footer hints
-    let hints = Paragraph::new(vec![Line::from(vec![
-        Span::styled("↑↓/j/k", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" navigate | ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Enter", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" select | ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Esc", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
-    ])]);
-    frame.render_widget(hints, layout[2]);
+    render_shortcut_hints(
+        frame,
+        layout[2],
+        &[
+            ("↑↓/j/k", " navigate | "),
+            ("Enter", " select | "),
+            ("Esc", " cancel"),
+        ],
+    );
 }
 
 fn render_copy_select_entity(frame: &mut Frame, app: &mut App) {
     let area = centered_rect(70, 60, frame.area());
-    frame.render_widget(Clear, area);
-
     let connection_name = app
         .copy_dest_connection_name
         .as_deref()
         .unwrap_or("Unknown");
-
-    let block = Block::default()
-        .title(format!(
+    let inner = render_popup_block(
+        frame,
+        area,
+        format!(
             " Copy Message — Select Destination Entity [{}] ",
             connection_name
-        ))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+        ),
+        Color::Cyan,
+    );
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -1199,16 +1159,14 @@ fn render_copy_select_entity(frame: &mut Frame, app: &mut App) {
         }
     }
 
-    // Footer hints
-    let hints = Paragraph::new(vec![Line::from(vec![
-        Span::styled("↑↓/j/k", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" navigate | ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Enter", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" select | ", Style::default().fg(Color::DarkGray)),
-        Span::styled("s", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" use source name | ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Esc", Style::default().fg(Color::Yellow).bold()),
-        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
-    ])]);
-    frame.render_widget(hints, layout[2]);
+    render_shortcut_hints(
+        frame,
+        layout[2],
+        &[
+            ("↑↓/j/k", " navigate | "),
+            ("Enter", " select | "),
+            ("s", " use source name | "),
+            ("Esc", " cancel"),
+        ],
+    );
 }
