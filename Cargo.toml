@@ -1,6 +1,6 @@
 [package]
 name = "service-bus-explorer-tui"
-version = "0.0.12"
+version = "0.0.13"
 edition = "2021"
 authors = ["Karl Solgård <karl@solgard.solutions>"]
 description = "A cross-platform TUI for managing Azure Service Bus"
