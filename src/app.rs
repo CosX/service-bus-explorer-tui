@@ -656,7 +656,9 @@ impl App {
 
     pub fn build_subscription_filter_from_form(&self) -> (String, String) {
         let get = |idx: usize| -> Option<String> {
-            self.input_fields.get(idx).map(|(_, v)| v.trim().to_string())
+            self.input_fields
+                .get(idx)
+                .map(|(_, v)| v.trim().to_string())
         };
 
         let rule_name = get(2)

@@ -1101,7 +1101,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             let mgmt = mgmt.clone();
                             let topic_name = topic_name.to_string();
                             let sub_name = sub_name.to_string();
-                            let (rule_name, sql_expression) = app.build_subscription_filter_from_form();
+                            let (rule_name, sql_expression) =
+                                app.build_subscription_filter_from_form();
                             let tx = app.bg_tx.clone();
 
                             app.bg_running = true;
