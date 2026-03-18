@@ -27,7 +27,7 @@ openssl-sys = { version = "0.9", features = ["vendored"], optional = true }
 
 # TUI
 ratatui = "0.30"
-crossterm = "0.28"
+crossterm = "0.29"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
