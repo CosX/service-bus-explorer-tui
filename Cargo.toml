@@ -48,7 +48,7 @@ base64 = "0.22"
 urlencoding = "2"
 
 # Azure AD authentication
-azure_identity = "0.23"
+azure_identity = "0.33"
 azure_core = "0.23"
 
 # Time
