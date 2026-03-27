@@ -342,6 +342,7 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
             if let Some(msg) = msgs.get(app.message_selected) {
                 app.selected_message_detail = Some(msg.clone());
                 app.detail_body_scroll = 0;
+                app.body_raw_mode = false;
             }
         }
         KeyCode::Char('1') => {
@@ -509,6 +510,14 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
         KeyCode::Esc => {
             app.selected_message_detail = None;
             app.detail_body_scroll = 0;
+            app.body_raw_mode = false;
+        }
+        // f = Toggle raw/formatted body
+        KeyCode::Char('f') => {
+            if app.selected_message_detail.is_some() {
+                app.body_raw_mode = !app.body_raw_mode;
+                app.detail_body_scroll = 0;
+            }
         }
         _ => {}
     }
