@@ -149,7 +149,11 @@ pub enum DetailView {
     None,
     Queue(QueueDescription, Option<QueueRuntimeInfo>),
     Topic(TopicDescription, Option<TopicRuntimeInfo>),
-    Subscription(SubscriptionDescription, Option<SubscriptionRuntimeInfo>, Vec<SubscriptionRule>),
+    Subscription(
+        SubscriptionDescription,
+        Option<SubscriptionRuntimeInfo>,
+        Vec<SubscriptionRule>,
+    ),
 }
 
 /// Tab for the message panel.
@@ -889,7 +893,10 @@ mod tests {
             && !app.loading
             && app.management.is_some()
             && app.config.settings.auto_refresh_secs > 0;
-        assert!(!should_check, "should not trigger without management client");
+        assert!(
+            !should_check,
+            "should not trigger without management client"
+        );
     }
 
     #[test]

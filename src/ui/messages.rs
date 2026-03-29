@@ -138,9 +138,9 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         .split(inner);
 
     let hint_text = if app.message_tab == MessageTab::DeadLetter {
-        "R=Resend All  D=Delete All  Enter=View  e=Edit & Resend"
+        "R=Resend All  D=Delete All  x=Delete  Enter=View  e=Edit & Resend"
     } else {
-        "D=Delete All  Enter=View  e=Edit & Resend"
+        "D=Delete All  x=Delete  Enter=View  e=Edit & Resend"
     };
     let hint = Paragraph::new(hint_text).style(Style::default().fg(Color::DarkGray));
 
@@ -206,7 +206,7 @@ fn render_detail_readonly(frame: &mut Frame, app: &mut App, inner: Rect) {
     )
     .block(
         Block::default()
-            .title(" Properties (e = edit & resend · Esc = close) ")
+            .title(" Properties (e = edit & resend · x = delete · Esc = close) ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow)),
     );

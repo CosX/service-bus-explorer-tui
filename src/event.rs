@@ -604,8 +604,14 @@ mod tests {
         let mut app = new_app_on_tree();
         app.auto_refresh_enabled = false;
         app.config.settings.auto_refresh_secs = 30;
-        // Simulate stale last_refresh from a previous enable/disable cycle
-        app.last_refresh = Some(Instant::now() - std::time::Duration::from_secs(999));
+        // Simulate stale last_refresh from a previous enable/disable cycle.
+        // Use checked_sub to avoid overflow on Windows where Instant can't
+        // go below the system boot time (fresh CI runners may have < 999s uptime).
+        app.last_refresh = Some(
+            Instant::now()
+                .checked_sub(std::time::Duration::from_secs(999))
+                .unwrap_or(Instant::now()),
+        );
 
         handle_tree_input(&mut app, press(KeyCode::Char('t')));
 
