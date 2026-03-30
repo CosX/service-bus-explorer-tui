@@ -234,6 +234,8 @@ pub struct App {
     pub message_table_state: TableState,
     /// Scroll offset for the read-only message body detail view.
     pub detail_body_scroll: u16,
+    /// When true, show message body as raw text (no JSON/XML formatting).
+    pub body_raw_mode: bool,
 
     // Copy operation state
     pub copy_source_message: Option<ReceivedMessage>,
@@ -295,6 +297,7 @@ impl App {
             tree_list_state: ListState::default(),
             message_table_state: TableState::default(),
             detail_body_scroll: 0,
+            body_raw_mode: false,
             copy_source_message: None,
             copy_source_entity: None,
             copy_dest_connection_name: None,

@@ -206,16 +206,24 @@ fn render_detail_readonly(frame: &mut Frame, app: &mut App, inner: Rect) {
     )
     .block(
         Block::default()
-            .title(" Properties (e = edit & resend · x = delete · Esc = close) ")
+            .title(" Properties (e = edit & resend · x = delete · f = format · Esc = close) ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow)),
     );
     frame.render_widget(props_table, detail_layout[0]);
 
-    let body = san_ml(&pretty_print_body(&msg.body));
+    let body = san_ml(&pretty_print_body(&msg.body, app.body_raw_mode));
     let body_lines = body.lines().count() as u16;
+    let format_label = if app.body_raw_mode {
+        "raw"
+    } else {
+        "formatted"
+    };
     let body_inner = Block::default()
-        .title(" Body (j/k to scroll · Esc = close) ")
+        .title(format!(
+            " Body [{}] (f=toggle · j/k scroll · Esc close) ",
+            format_label
+        ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow));
     let body_viewport = body_inner.inner(detail_layout[1]).height;
@@ -386,7 +394,7 @@ fn render_detail_edit(frame: &mut Frame, app: &mut App, inner: Rect) {
             let (before, after) = body_val.split_at(cursor);
             san_ml(&format!("{}▏{}", before, after))
         } else {
-            san_ml(&pretty_print_body(body_val))
+            san_ml(&pretty_print_body(body_val, false))
         };
         let body_widget = Paragraph::new(display_body)
             .style(Style::default().fg(Color::White))
@@ -417,11 +425,46 @@ fn render_detail_edit(frame: &mut Frame, app: &mut App, inner: Rect) {
     frame.render_widget(hint, hint_area);
 }
 
-fn pretty_print_body(body: &str) -> String {
-    // Try to parse as JSON and pretty-print
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
-        serde_json::to_string_pretty(&val).unwrap_or_else(|_| body.to_string())
-    } else {
-        body.to_string()
+fn pretty_print_body(body: &str, raw: bool) -> String {
+    if raw {
+        return body.to_string();
     }
+    // Try JSON first
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Ok(pretty) = serde_json::to_string_pretty(&val) {
+            return pretty;
+        }
+    }
+    // Try XML
+    if body.trim_start().starts_with('<') {
+        if let Some(pretty) = pretty_print_xml(body) {
+            return pretty;
+        }
+    }
+    body.to_string()
+}
+
+fn pretty_print_xml(body: &str) -> Option<String> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    use quick_xml::Writer;
+    use std::io::Cursor;
+
+    let mut reader = Reader::from_str(body);
+    let mut writer = Writer::new_with_indent(Cursor::new(Vec::new()), b' ', 2);
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Eof) => break,
+            Ok(event) => {
+                if writer.write_event(event).is_err() {
+                    return None;
+                }
+            }
+            Err(_) => return None,
+        }
+    }
+
+    let result = writer.into_inner().into_inner();
+    String::from_utf8(result).ok()
 }
