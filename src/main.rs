@@ -171,6 +171,15 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     needs_refresh = true;
                 }
                 BgEvent::Cancelled { message } => {
+                    // Dismiss discovery modal if it was in Loading state
+                    if matches!(
+                        app.modal,
+                        ActiveModal::NamespaceDiscovery {
+                            state: DiscoveryState::Loading
+                        }
+                    ) {
+                        app.modal = ActiveModal::None;
+                    }
                     app.set_status(message);
                     app.bg_running = false;
                     needs_refresh = true;
@@ -518,10 +527,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     };
 
                 let client = client::resource_manager::ResourceManagerClient::new(credential);
-                let result = client.discover_namespaces().await;
+                let result = client.discover_namespaces(cancel.clone()).await;
 
                 if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     let _ = bg_tx.send(BgEvent::NamespacesDiscovered { result });
+                } else {
+                    let _ = bg_tx.send(BgEvent::Cancelled {
+                        message: "Discovery cancelled".into(),
+                    });
                 }
             });
         }
