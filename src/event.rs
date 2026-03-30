@@ -413,9 +413,15 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
         }
         // / = Filter messages
         KeyCode::Char('/') => {
-            if app.selected_message_detail.is_none() && filtered_len > 0 {
-                app.message_search_active = true;
-                app.message_search_cursor = app.message_search_query.len();
+            if app.selected_message_detail.is_none() {
+                let has_messages = match app.message_tab {
+                    MessageTab::Messages => !app.messages.is_empty(),
+                    MessageTab::DeadLetter => !app.dlq_messages.is_empty(),
+                };
+                if has_messages {
+                    app.message_search_active = true;
+                    app.message_search_cursor = app.message_search_query.len();
+                }
             }
         }
         // R = Bulk resend from DLQ back to main entity
