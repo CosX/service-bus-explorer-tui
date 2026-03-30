@@ -64,20 +64,23 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
         ActiveModal::Help => {
             app.modal = ActiveModal::None;
         }
-        ActiveModal::ConnectionModeSelect => match key.code {
-            KeyCode::Char('1') | KeyCode::Char('s') | KeyCode::Char('S') => {
-                app.input_buffer.clear();
-                app.input_cursor = 0;
-                app.modal = ActiveModal::ConnectionInput;
+        ActiveModal::ConnectionModeSelect => {
+            match key.code {
+                KeyCode::Char('1') | KeyCode::Char('s') | KeyCode::Char('S') => {
+                    app.input_buffer.clear();
+                    app.input_cursor = 0;
+                    app.modal = ActiveModal::ConnectionInput;
+                }
+                KeyCode::Char('2') | KeyCode::Char('a') | KeyCode::Char('A') => {
+                    app.start_namespace_discovery();
+                }
+                KeyCode::Esc => {
+                    app.modal = ActiveModal::None;
+                }
+                _ => {}
             }
-            KeyCode::Char('2') | KeyCode::Char('a') | KeyCode::Char('A') => {
-                app.start_namespace_discovery();
-            }
-            KeyCode::Esc => {
-                app.modal = ActiveModal::None;
-            }
-            _ => {}
-        },
+            return;
+        }
         ActiveModal::NamespaceDiscovery { state } => match state {
             DiscoveryState::Loading => {
                 if key.code == KeyCode::Esc {
