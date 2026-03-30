@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Azure subscription returned from ARM API.
@@ -158,9 +159,16 @@ impl ResourceManagerClient {
 
     /// Discover all Service Bus namespaces across all subscriptions.
     /// Returns both successful discoveries and per-subscription errors.
-    pub async fn discover_namespaces(&self) -> DiscoveryResult {
+    pub async fn discover_namespaces(&self, cancel: Arc<AtomicBool>) -> DiscoveryResult {
         let mut all_namespaces = Vec::new();
         let mut errors = Vec::new();
+
+        if cancel.load(Ordering::Relaxed) {
+            return DiscoveryResult {
+                namespaces: Vec::new(),
+                errors: Vec::new(),
+            };
+        }
 
         // Get subscriptions
         let subscriptions = match self.list_subscriptions().await {
@@ -172,6 +180,13 @@ impl ResourceManagerClient {
                 };
             }
         };
+
+        if cancel.load(Ordering::Relaxed) {
+            return DiscoveryResult {
+                namespaces: Vec::new(),
+                errors: Vec::new(),
+            };
+        }
 
         if subscriptions.is_empty() {
             return DiscoveryResult {
@@ -198,6 +213,10 @@ impl ResourceManagerClient {
 
         // Collect results
         for handle in handles {
+            if cancel.load(Ordering::Relaxed) {
+                // Abort remaining handles
+                break;
+            }
             match handle.await {
                 Ok((sub_name, _sub_id, Ok(namespaces))) => {
                     for ns in namespaces {
