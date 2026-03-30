@@ -51,6 +51,7 @@ pub fn render_help(frame: &mut Frame) {
             "                 (on topics: operates across all subs)",
             Style::default().fg(Color::DarkGray),
         )),
+        Line::from("  /              Filter messages (type to search)"),
         Line::from("  1/2            Switch Messages/DLQ tab"),
         Line::from("  Enter          View message detail"),
         Line::from("  Esc            Close message detail"),
