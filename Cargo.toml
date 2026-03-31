@@ -42,8 +42,8 @@ toml = "1"
 quick-xml = { version = "0.39", features = ["serialize"] }
 
 # Auth / Crypto
-hmac = "0.12"
-sha2 = "0.10"
+hmac = "0.13"
+sha2 = "0.11"
 base64 = "0.22"
 urlencoding = "2"
 
