@@ -237,6 +237,12 @@ pub struct App {
     /// When true, show message body as raw text (no JSON/XML formatting).
     pub body_raw_mode: bool,
 
+    // Message search/filter
+    pub message_search_query: String,
+    pub message_search_active: bool,
+    pub message_search_cursor: usize,
+    pub message_filtered_indices: Vec<usize>,
+
     // Copy operation state
     pub copy_source_message: Option<ReceivedMessage>,
     pub copy_source_entity: Option<String>,
@@ -298,6 +304,10 @@ impl App {
             message_table_state: TableState::default(),
             detail_body_scroll: 0,
             body_raw_mode: false,
+            message_search_query: String::new(),
+            message_search_active: false,
+            message_search_cursor: 0,
+            message_filtered_indices: Vec::new(),
             copy_source_message: None,
             copy_source_entity: None,
             copy_dest_connection_name: None,
@@ -377,6 +387,7 @@ impl App {
         self.selected_message_detail = None;
         self.detail_editing = false;
         self.edit_source_dlq_seq = None;
+        self.clear_message_filter();
 
         // Reset UI state
         self.focus = FocusPanel::Tree;
@@ -420,6 +431,46 @@ impl App {
         } else {
             Some((&node.path, &node.entity_type))
         }
+    }
+
+    /// Rebuild the filtered indices for the current message tab based on `message_search_query`.
+    /// If the query is empty, all messages are included.
+    pub fn apply_message_filter(&mut self) {
+        let messages = match self.message_tab {
+            MessageTab::Messages => &self.messages,
+            MessageTab::DeadLetter => &self.dlq_messages,
+        };
+
+        if self.message_search_query.is_empty() {
+            self.message_filtered_indices = (0..messages.len()).collect();
+        } else {
+            let query = self.message_search_query.to_lowercase();
+            self.message_filtered_indices = messages
+                .iter()
+                .enumerate()
+                .filter(|(_, msg)| message_matches(msg, &query))
+                .map(|(idx, _)| idx)
+                .collect();
+        }
+
+        // Clamp selection to filtered bounds
+        if self.message_filtered_indices.is_empty() {
+            self.message_selected = 0;
+        } else if self.message_selected >= self.message_filtered_indices.len() {
+            self.message_selected = self.message_filtered_indices.len() - 1;
+        }
+    }
+
+    /// Clear the message filter and restore the full list.
+    pub fn clear_message_filter(&mut self) {
+        self.message_search_query.clear();
+        self.message_search_active = false;
+        self.message_search_cursor = 0;
+        let len = match self.message_tab {
+            MessageTab::Messages => self.messages.len(),
+            MessageTab::DeadLetter => self.dlq_messages.len(),
+        };
+        self.message_filtered_indices = (0..len).collect();
     }
 
     /// Initialize the send message form fields.
@@ -747,6 +798,62 @@ fn toggle_node(node: &mut TreeNode, id: &str) -> bool {
     false
 }
 
+/// Check if a message matches a search query (case-insensitive substring).
+/// Searches across message ID, sequence number, label, body (first 500 chars),
+/// correlation ID, custom properties, and dead-letter fields.
+fn message_matches(msg: &ReceivedMessage, query: &str) -> bool {
+    let bp = &msg.broker_properties;
+
+    if let Some(ref id) = bp.message_id {
+        if id.to_lowercase().contains(query) {
+            return true;
+        }
+    }
+    if let Some(seq) = bp.sequence_number {
+        if seq.to_string().contains(query) {
+            return true;
+        }
+    }
+    if let Some(ref label) = bp.label {
+        if label.to_lowercase().contains(query) {
+            return true;
+        }
+    }
+    if let Some(ref cid) = bp.correlation_id {
+        if cid.to_lowercase().contains(query) {
+            return true;
+        }
+    }
+    if let Some(ref enqueued) = bp.enqueued_time_utc {
+        if enqueued.to_lowercase().contains(query) {
+            return true;
+        }
+    }
+    // Body: search first 500 chars to avoid perf issues on huge payloads
+    let body_search_len = msg.body.len().min(500);
+    if msg.body[..body_search_len].to_lowercase().contains(query) {
+        return true;
+    }
+    // Custom properties
+    for (k, v) in &msg.custom_properties {
+        if k.to_lowercase().contains(query) || v.to_lowercase().contains(query) {
+            return true;
+        }
+    }
+    // DLQ-specific fields
+    if let Some(ref reason) = bp.dead_letter_reason {
+        if reason.to_lowercase().contains(query) {
+            return true;
+        }
+    }
+    if let Some(ref desc) = bp.dead_letter_error_description {
+        if desc.to_lowercase().contains(query) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Build the entity tree from the management API (runs on a spawned task).
 pub async fn build_tree(
     mgmt: ManagementClient,
@@ -851,6 +958,7 @@ pub async fn build_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::models::{BrokerProperties, ReceivedMessage};
 
     #[test]
     fn auto_refresh_enabled_derived_from_config() {
@@ -928,5 +1036,149 @@ mod tests {
             && !app.loading
             && app.config.settings.auto_refresh_secs > 0;
         assert!(!should_check, "should not trigger while loading");
+    }
+
+    fn make_msg(id: &str, label: &str, body: &str, seq: i64) -> ReceivedMessage {
+        ReceivedMessage {
+            body: body.to_string(),
+            broker_properties: BrokerProperties {
+                message_id: Some(id.to_string()),
+                label: Some(label.to_string()),
+                sequence_number: Some(seq),
+                ..Default::default()
+            },
+            custom_properties: Vec::new(),
+            lock_token_uri: None,
+            source_entity: None,
+        }
+    }
+
+    #[test]
+    fn filter_empty_query_includes_all() {
+        let mut app = App::new();
+        app.messages = vec![
+            make_msg("a", "alpha", "body1", 1),
+            make_msg("b", "beta", "body2", 2),
+            make_msg("c", "gamma", "body3", 3),
+        ];
+        app.message_search_query.clear();
+        app.apply_message_filter();
+
+        assert_eq!(app.message_filtered_indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn filter_by_message_id() {
+        let mut app = App::new();
+        app.messages = vec![
+            make_msg("abc-123", "alpha", "body1", 1),
+            make_msg("xyz-456", "beta", "body2", 2),
+            make_msg("abc-789", "gamma", "body3", 3),
+        ];
+        app.message_search_query = "abc".to_string();
+        app.apply_message_filter();
+
+        assert_eq!(app.message_filtered_indices, vec![0, 2]);
+    }
+
+    #[test]
+    fn filter_case_insensitive() {
+        let mut app = App::new();
+        app.messages = vec![
+            make_msg("a", "Hello World", "body1", 1),
+            make_msg("b", "goodbye", "body2", 2),
+        ];
+        app.message_search_query = "hello".to_string();
+        app.apply_message_filter();
+
+        assert_eq!(app.message_filtered_indices, vec![0]);
+    }
+
+    #[test]
+    fn filter_by_body_content() {
+        let mut app = App::new();
+        app.messages = vec![
+            make_msg("a", "", "{\"key\": \"needle\"}", 1),
+            make_msg("b", "", "{\"key\": \"other\"}", 2),
+        ];
+        app.message_search_query = "needle".to_string();
+        app.apply_message_filter();
+
+        assert_eq!(app.message_filtered_indices, vec![0]);
+    }
+
+    #[test]
+    fn filter_by_custom_properties() {
+        let mut app = App::new();
+        let mut msg = make_msg("a", "", "body", 1);
+        msg.custom_properties = vec![("env".to_string(), "production".to_string())];
+        app.messages = vec![msg, make_msg("b", "", "body", 2)];
+        app.message_search_query = "production".to_string();
+        app.apply_message_filter();
+
+        assert_eq!(app.message_filtered_indices, vec![0]);
+    }
+
+    #[test]
+    fn filter_by_sequence_number() {
+        let mut app = App::new();
+        app.messages = vec![
+            make_msg("a", "", "body", 12345),
+            make_msg("b", "", "body", 67890),
+        ];
+        app.message_search_query = "12345".to_string();
+        app.apply_message_filter();
+
+        assert_eq!(app.message_filtered_indices, vec![0]);
+    }
+
+    #[test]
+    fn filter_clamps_selection() {
+        let mut app = App::new();
+        app.messages = vec![
+            make_msg("a", "alpha", "body1", 1),
+            make_msg("b", "beta", "body2", 2),
+            make_msg("c", "gamma", "body3", 3),
+        ];
+        app.message_selected = 2; // pointing at last message
+        app.message_search_query = "alpha".to_string(); // only first matches
+        app.apply_message_filter();
+
+        assert_eq!(app.message_filtered_indices, vec![0]);
+        assert_eq!(app.message_selected, 0); // clamped
+    }
+
+    #[test]
+    fn clear_filter_restores_full_list() {
+        let mut app = App::new();
+        app.messages = vec![
+            make_msg("a", "alpha", "body1", 1),
+            make_msg("b", "beta", "body2", 2),
+        ];
+        app.message_search_query = "alpha".to_string();
+        app.message_search_active = true;
+        app.message_search_cursor = 5;
+        app.apply_message_filter();
+        assert_eq!(app.message_filtered_indices.len(), 1);
+
+        app.clear_message_filter();
+
+        assert!(app.message_search_query.is_empty());
+        assert!(!app.message_search_active);
+        assert_eq!(app.message_search_cursor, 0);
+        assert_eq!(app.message_filtered_indices, vec![0, 1]);
+    }
+
+    #[test]
+    fn filter_dlq_by_dead_letter_reason() {
+        let mut app = App::new();
+        let mut msg = make_msg("a", "", "body", 1);
+        msg.broker_properties.dead_letter_reason = Some("MaxDeliveryCount".to_string());
+        app.dlq_messages = vec![msg, make_msg("b", "", "body", 2)];
+        app.message_tab = MessageTab::DeadLetter;
+        app.message_search_query = "maxdelivery".to_string();
+        app.apply_message_filter();
+
+        assert_eq!(app.message_filtered_indices, vec![0]);
     }
 }

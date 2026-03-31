@@ -116,6 +116,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.dlq_messages.clear();
                     app.message_selected = 0;
                     app.bg_running = false;
+                    app.clear_message_filter();
                     needs_refresh = true;
                 }
                 BgEvent::ResendComplete { resent, errors } => {
@@ -127,6 +128,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.dlq_messages.clear();
                     app.message_selected = 0;
                     app.bg_running = false;
+                    app.clear_message_filter();
                     needs_refresh = true;
                 }
                 BgEvent::BulkDeleteComplete { deleted, was_dlq } => {
@@ -138,6 +140,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     }
                     app.message_selected = 0;
                     app.bg_running = false;
+                    app.clear_message_filter();
                     needs_refresh = true;
                 }
                 BgEvent::SingleDeleteComplete {
@@ -158,14 +161,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     }) {
                         app.selected_message_detail = None;
                     }
-                    let len = if is_dlq {
-                        app.dlq_messages.len()
-                    } else {
-                        app.messages.len()
-                    };
-                    if app.message_selected >= len && len > 0 {
-                        app.message_selected = len - 1;
-                    }
+                    // Rebuild filter indices after message removal
+                    app.apply_message_filter();
                     app.set_status(format!("Deleted message seq #{}", sequence_number));
                     app.bg_running = false;
                     needs_refresh = true;
@@ -293,6 +290,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.message_selected = 0;
                     app.selected_message_detail = None;
                     app.focus = FocusPanel::Messages;
+                    app.clear_message_filter();
                     if is_dlq {
                         app.set_status(format!("Peeked {} DLQ messages", count));
                     } else {
@@ -321,6 +319,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     if let Some(seq) = dlq_seq_removed {
                         app.dlq_messages
                             .retain(|m| m.broker_properties.sequence_number != Some(seq));
+                        app.apply_message_filter();
                     }
                     app.set_status(status);
                     if was_inline {

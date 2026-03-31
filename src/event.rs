@@ -311,11 +311,64 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    let messages = match app.message_tab {
-        MessageTab::Messages => &app.messages,
-        MessageTab::DeadLetter => &app.dlq_messages,
-    };
-    let len = messages.len();
+    // ── Search bar input intercept ──
+    if app.message_search_active {
+        match key.code {
+            KeyCode::Esc => {
+                app.clear_message_filter();
+                return;
+            }
+            KeyCode::Enter => {
+                // Close search bar but keep filter active
+                app.message_search_active = false;
+                return;
+            }
+            KeyCode::Char(c) => {
+                app.message_search_query
+                    .insert(app.message_search_cursor, c);
+                app.message_search_cursor += c.len_utf8();
+                app.apply_message_filter();
+                return;
+            }
+            KeyCode::Backspace => {
+                if app.message_search_cursor > 0 {
+                    let prev = app.message_search_query[..app.message_search_cursor]
+                        .chars()
+                        .last()
+                        .map_or(0, |c| c.len_utf8());
+                    app.message_search_cursor -= prev;
+                    app.message_search_query.remove(app.message_search_cursor);
+                    app.apply_message_filter();
+                }
+                return;
+            }
+            KeyCode::Left => {
+                if app.message_search_cursor > 0 {
+                    let prev = app.message_search_query[..app.message_search_cursor]
+                        .chars()
+                        .last()
+                        .map_or(0, |c| c.len_utf8());
+                    app.message_search_cursor -= prev;
+                }
+                return;
+            }
+            KeyCode::Right => {
+                if app.message_search_cursor < app.message_search_query.len() {
+                    let next = app.message_search_query[app.message_search_cursor..]
+                        .chars()
+                        .next()
+                        .map_or(0, |c| c.len_utf8());
+                    app.message_search_cursor += next;
+                }
+                return;
+            }
+            // j/k/Up/Down fall through to normal navigation below
+            KeyCode::Up | KeyCode::Down => {}
+            _ => return,
+        }
+    }
+
+    let filtered_len = app.message_filtered_indices.len();
 
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => {
@@ -330,16 +383,20 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
             if app.selected_message_detail.is_some() {
                 app.detail_body_scroll = app.detail_body_scroll.saturating_add(1);
             } else {
-                move_selection_down(&mut app.message_selected, len);
+                move_selection_down(&mut app.message_selected, filtered_len);
             }
         }
         KeyCode::Enter => {
-            // Show message detail
+            // Show message detail — map through filtered indices
             let msgs = match app.message_tab {
                 MessageTab::Messages => &app.messages,
                 MessageTab::DeadLetter => &app.dlq_messages,
             };
-            if let Some(msg) = msgs.get(app.message_selected) {
+            let real_idx = app
+                .message_filtered_indices
+                .get(app.message_selected)
+                .copied();
+            if let Some(msg) = real_idx.and_then(|i| msgs.get(i)) {
                 app.selected_message_detail = Some(msg.clone());
                 app.detail_body_scroll = 0;
                 app.body_raw_mode = false;
@@ -348,10 +405,25 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
         KeyCode::Char('1') => {
             app.message_tab = MessageTab::Messages;
             app.message_selected = 0;
+            app.clear_message_filter();
         }
         KeyCode::Char('2') => {
             app.message_tab = MessageTab::DeadLetter;
             app.message_selected = 0;
+            app.clear_message_filter();
+        }
+        // / = Filter messages
+        KeyCode::Char('/') => {
+            if app.selected_message_detail.is_none() {
+                let has_messages = match app.message_tab {
+                    MessageTab::Messages => !app.messages.is_empty(),
+                    MessageTab::DeadLetter => !app.dlq_messages.is_empty(),
+                };
+                if has_messages {
+                    app.message_search_active = true;
+                    app.message_search_cursor = app.message_search_query.len();
+                }
+            }
         }
         // R = Bulk resend from DLQ back to main entity
         KeyCode::Char('R') => {
@@ -430,7 +502,11 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
                     } else {
                         &app.messages
                     };
-                    msgs.get(app.message_selected).cloned()
+                    let real_idx = app
+                        .message_filtered_indices
+                        .get(app.message_selected)
+                        .copied();
+                    real_idx.and_then(|i| msgs.get(i).cloned())
                 };
                 if let Some(msg) = msg {
                     if let Some(seq) = msg.broker_properties.sequence_number {
@@ -463,10 +539,14 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
                 app.init_detail_edit();
             } else {
                 // No detail open — use list selection and enter inline edit
-                let msg = match app.message_tab {
-                    MessageTab::Messages => app.messages.get(app.message_selected).cloned(),
-                    MessageTab::DeadLetter => app.dlq_messages.get(app.message_selected).cloned(),
-                };
+                let real_idx = app
+                    .message_filtered_indices
+                    .get(app.message_selected)
+                    .copied();
+                let msg = real_idx.and_then(|i| match app.message_tab {
+                    MessageTab::Messages => app.messages.get(i).cloned(),
+                    MessageTab::DeadLetter => app.dlq_messages.get(i).cloned(),
+                });
                 if let Some(msg) = msg {
                     app.selected_message_detail = Some(msg);
                     app.init_detail_edit();
@@ -479,15 +559,17 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
         KeyCode::Char('C') => {
             if !block_if_bg_running(app, BG_BUSY_MSG) {
                 // Clone all necessary data before any mutations
+                let real_idx = app
+                    .message_filtered_indices
+                    .get(app.message_selected)
+                    .copied();
                 let msg = if app.selected_message_detail.is_some() {
                     app.selected_message_detail.clone()
                 } else {
-                    match app.message_tab {
-                        MessageTab::Messages => app.messages.get(app.message_selected).cloned(),
-                        MessageTab::DeadLetter => {
-                            app.dlq_messages.get(app.message_selected).cloned()
-                        }
-                    }
+                    real_idx.and_then(|i| match app.message_tab {
+                        MessageTab::Messages => app.messages.get(i).cloned(),
+                        MessageTab::DeadLetter => app.dlq_messages.get(i).cloned(),
+                    })
                 };
                 let has_connections = !app.config.connections.is_empty();
                 let entity_path = app.selected_entity().map(|(path, _)| path.to_string());
@@ -508,9 +590,14 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Esc => {
-            app.selected_message_detail = None;
-            app.detail_body_scroll = 0;
-            app.body_raw_mode = false;
+            if app.selected_message_detail.is_some() {
+                app.selected_message_detail = None;
+                app.detail_body_scroll = 0;
+                app.body_raw_mode = false;
+            } else if !app.message_search_query.is_empty() {
+                // Clear active filter when pressing Esc in list view
+                app.clear_message_filter();
+            }
         }
         // f = Toggle raw/formatted body
         KeyCode::Char('f') => {

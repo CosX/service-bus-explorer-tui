@@ -65,52 +65,75 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
+    let total_count = messages.len();
+    let filtered_indices = &app.message_filtered_indices;
+
+    // Show a "no matches" message when filter excludes everything
+    if filtered_indices.is_empty() && !app.message_search_query.is_empty() {
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let msg_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(3), Constraint::Length(1)])
+            .split(inner);
+
+        let empty_msg = Paragraph::new("No messages match filter. Press Esc to clear.")
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(empty_msg, msg_layout[0]);
+        render_search_bar(frame, app, msg_layout[1], total_count);
+        return;
+    }
+
     let inner = block.inner(area);
 
-    // Build table rows
+    // Build table rows from filtered indices
     let header = Row::new(vec!["#", "Message ID", "Seq #", "Subject", "Enqueued"])
         .style(Style::default().fg(Color::Yellow).bold())
         .bottom_margin(1);
 
-    let rows: Vec<Row> = messages
+    let rows: Vec<Row> = filtered_indices
         .iter()
         .enumerate()
-        .map(|(idx, msg)| {
-            let style = if idx == app.message_selected && is_focused {
+        .filter_map(|(display_idx, &orig_idx)| {
+            let msg = messages.get(orig_idx)?;
+            let style = if display_idx == app.message_selected && is_focused {
                 Style::default().bg(Color::DarkGray).fg(Color::White)
             } else {
                 Style::default()
             };
 
-            Row::new(vec![
-                (idx + 1).to_string(),
-                sanitize_for_terminal(
-                    &msg.broker_properties
-                        .message_id
-                        .clone()
+            Some(
+                Row::new(vec![
+                    (orig_idx + 1).to_string(),
+                    sanitize_for_terminal(
+                        &msg.broker_properties
+                            .message_id
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
+                        false,
+                    ),
+                    msg.broker_properties
+                        .sequence_number
+                        .map(|v| v.to_string())
                         .unwrap_or_else(|| "-".to_string()),
-                    false,
-                ),
-                msg.broker_properties
-                    .sequence_number
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                sanitize_for_terminal(
-                    &msg.broker_properties
-                        .label
-                        .clone()
-                        .unwrap_or_else(|| "-".to_string()),
-                    false,
-                ),
-                sanitize_for_terminal(
-                    &msg.broker_properties
-                        .enqueued_time_utc
-                        .clone()
-                        .unwrap_or_else(|| "-".to_string()),
-                    false,
-                ),
-            ])
-            .style(style)
+                    sanitize_for_terminal(
+                        &msg.broker_properties
+                            .label
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
+                        false,
+                    ),
+                    sanitize_for_terminal(
+                        &msg.broker_properties
+                            .enqueued_time_utc
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
+                        false,
+                    ),
+                ])
+                .style(style),
+            )
         })
         .collect();
 
@@ -131,22 +154,62 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     // Persist scroll offset across frames for natural scrolling
     app.message_table_state.select(Some(app.message_selected));
 
-    // Layout: table + hint bar
+    // Layout: table + hint/search bar
     let msg_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(inner);
 
-    let hint_text = if app.message_tab == MessageTab::DeadLetter {
-        "R=Resend All  D=Delete All  x=Delete  Enter=View  e=Edit & Resend"
-    } else {
-        "D=Delete All  x=Delete  Enter=View  e=Edit & Resend"
-    };
-    let hint = Paragraph::new(hint_text).style(Style::default().fg(Color::DarkGray));
-
     frame.render_widget(block, area);
     frame.render_stateful_widget(table, msg_layout[0], &mut app.message_table_state);
-    frame.render_widget(hint, msg_layout[1]);
+    render_search_bar(frame, app, msg_layout[1], total_count);
+}
+
+/// Render the bottom bar of the messages panel: search input, filter indicator, or default hints.
+fn render_search_bar(frame: &mut Frame, app: &App, area: Rect, total_count: usize) {
+    let filtered_count = app.message_filtered_indices.len();
+
+    if app.message_search_active {
+        // Active search input bar
+        let cursor_char = "▏";
+        let (before, after) = app.message_search_query.split_at(app.message_search_cursor);
+        let count_info = format!(" ({}/{})", filtered_count, total_count);
+
+        let spans = vec![
+            Span::styled("/ ", Style::default().fg(Color::Cyan)),
+            Span::raw(before),
+            Span::styled(cursor_char, Style::default().fg(Color::Cyan)),
+            Span::raw(after),
+            Span::styled(count_info, Style::default().fg(Color::DarkGray)),
+        ];
+        let bar = Paragraph::new(Line::from(spans));
+        frame.render_widget(bar, area);
+    } else if !app.message_search_query.is_empty() {
+        // Filter active but search bar closed — show indicator
+        let spans = vec![
+            Span::styled("filter: ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("\"{}\"", &app.message_search_query),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(
+                format!(" ({}/{})", filtered_count, total_count),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled("  /=edit  Esc=clear", Style::default().fg(Color::DarkGray)),
+        ];
+        let bar = Paragraph::new(Line::from(spans));
+        frame.render_widget(bar, area);
+    } else {
+        // Default hint bar
+        let hint_text = if app.message_tab == MessageTab::DeadLetter {
+            "/=Filter  R=Resend All  D=Delete All  Enter=View  e=Edit & Resend"
+        } else {
+            "/=Filter  D=Delete All  Enter=View  e=Edit & Resend"
+        };
+        let hint = Paragraph::new(hint_text).style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(hint, area);
+    }
 }
 
 fn render_detail_readonly(frame: &mut Frame, app: &mut App, inner: Rect) {
