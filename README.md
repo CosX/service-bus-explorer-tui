@@ -24,7 +24,7 @@ Built with Rust, [ratatui](https://ratatui.rs), and the Azure Service Bus REST A
 - Topic-level aggregated counts — topics display total active and DLQ messages summed across all subscriptions
 - View entity properties and runtime metrics (active, DLQ, scheduled, transfer counts)
 - Peek messages and dead-letter queues (with configurable count)
-- Send messages with custom properties, content type, TTL, session ID, and more
+- Send messages with custom properties, content type, TTL, session ID, scheduled enqueue time, and more
 - Edit & resend messages inline (WYSIWYG) — including DLQ messages back to the main entity
 - Copy messages across connections — copy messages (active or DLQ) to different Service Bus namespaces with full edit support
 - Create and delete queues, topics, and subscriptions

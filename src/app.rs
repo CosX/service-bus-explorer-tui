@@ -483,6 +483,7 @@ impl App {
             ("Session ID".to_string(), String::new()),
             ("Label".to_string(), String::new()),
             ("TTL (seconds)".to_string(), String::new()),
+            ("Scheduled (UTC)".to_string(), String::new()),
             ("Custom Properties (k=v,...)".to_string(), String::new()),
         ];
         self.input_field_index = 0;
@@ -542,6 +543,13 @@ impl App {
                 msg.broker_properties.label.clone().unwrap_or_default(),
             ),
             ("TTL (seconds)".to_string(), String::new()),
+            (
+                "Scheduled (UTC)".to_string(),
+                msg.broker_properties
+                    .scheduled_enqueue_time_utc
+                    .clone()
+                    .unwrap_or_default(),
+            ),
             ("Custom Properties (k=v,...)".to_string(), custom_props_str),
         ];
         self.input_field_index = 0;
@@ -561,7 +569,7 @@ impl App {
                 })
             };
 
-        let custom_props: Vec<(String, String)> = get(7)
+        let custom_props: Vec<(String, String)> = get(8)
             .map(|s| {
                 s.split(',')
                     .filter_map(|pair| {
@@ -586,6 +594,7 @@ impl App {
             session_id: get(4),
             label: get(5),
             time_to_live: get(6),
+            scheduled_enqueue_time: get(7),
             custom_properties: custom_props,
             ..Default::default()
         }
