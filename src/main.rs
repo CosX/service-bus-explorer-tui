@@ -302,7 +302,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                                 tokio::spawn(async move {
                                     match rm.resolve_namespace_resource_id(&fqdn).await {
                                         Ok(id) => {
-                                            let _ = tx.send(BgEvent::NamespaceResourceIdResolved(id));
+                                            let _ =
+                                                tx.send(BgEvent::NamespaceResourceIdResolved(id));
                                         }
                                         Err(e) => {
                                             let _ = tx.send(BgEvent::NamespaceResourceIdFailed(e));

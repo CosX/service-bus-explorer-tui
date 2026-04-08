@@ -336,8 +336,7 @@ impl ResourceManagerClient {
 
         let (gauge_resp, throughput_resp) = tokio::join!(gauge_request, throughput_request);
 
-        let gauge_resp =
-            gauge_resp.map_err(|e| format!("Gauge metrics request failed: {}", e))?;
+        let gauge_resp = gauge_resp.map_err(|e| format!("Gauge metrics request failed: {}", e))?;
         let throughput_resp =
             throughput_resp.map_err(|e| format!("Throughput metrics request failed: {}", e))?;
 

@@ -70,7 +70,14 @@ pub fn render_detail(frame: &mut Frame, app: &App, area: Rect) {
                 rows.push(make_row("Size (bytes)", &rt.size_in_bytes.to_string()));
             }
 
-            render_table_with_metrics(frame, area, block, rows, &app.entity_metrics, app.metrics_window);
+            render_table_with_metrics(
+                frame,
+                area,
+                block,
+                rows,
+                &app.entity_metrics,
+                app.metrics_window,
+            );
         }
         DetailView::Topic(desc, runtime) => {
             let mut rows = vec![
@@ -105,7 +112,14 @@ pub fn render_detail(frame: &mut Frame, app: &App, area: Rect) {
                 rows.push(make_row("Size (bytes)", &rt.size_in_bytes.to_string()));
             }
 
-            render_table_with_metrics(frame, area, block, rows, &app.entity_metrics, app.metrics_window);
+            render_table_with_metrics(
+                frame,
+                area,
+                block,
+                rows,
+                &app.entity_metrics,
+                app.metrics_window,
+            );
         }
         DetailView::Subscription(desc, runtime, rules) => {
             let mut rows = vec![
@@ -228,7 +242,11 @@ fn render_table_with_metrics(
             let dlq_sparkline = Sparkline::default()
                 .block(
                     Block::default()
-                        .title(sparkline_title("Dead-letter", label, &m.dead_letter_messages))
+                        .title(sparkline_title(
+                            "Dead-letter",
+                            label,
+                            &m.dead_letter_messages,
+                        ))
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::DarkGray)),
                 )

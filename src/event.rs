@@ -165,10 +165,7 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
             if app.metrics_available {
                 app.metrics_enabled = !app.metrics_enabled;
                 if app.metrics_enabled {
-                    app.set_status(format!(
-                        "Metrics enabled ({})",
-                        app.metrics_window.label()
-                    ));
+                    app.set_status(format!("Metrics enabled ({})", app.metrics_window.label()));
                     // Trigger re-fetch by resetting selection tracking
                     app.entity_metrics = None;
                 } else {
@@ -184,10 +181,7 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
             if app.metrics_available {
                 app.metrics_window = app.metrics_window.next();
                 app.entity_metrics = None;
-                app.set_status(format!(
-                    "Metrics window: {}",
-                    app.metrics_window.label()
-                ));
+                app.set_status(format!("Metrics window: {}", app.metrics_window.label()));
             } else {
                 app.set_status("Metrics require Azure AD connection");
             }

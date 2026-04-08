@@ -58,8 +58,8 @@ pub fn render_metrics_detail(frame: &mut Frame, app: &App) {
     }
 
     if series.is_empty() {
-        let msg = Paragraph::new("No metrics data available")
-            .style(Style::default().fg(Color::DarkGray));
+        let msg =
+            Paragraph::new("No metrics data available").style(Style::default().fg(Color::DarkGray));
         frame.render_widget(msg, inner);
         return;
     }
@@ -150,10 +150,7 @@ fn y_axis_labels(y_max: f64) -> Vec<Line<'static>> {
     let max_val = y_max as u64;
     let mid_val = max_val / 2;
     vec![
-        Line::from(Span::styled(
-            "0",
-            Style::default().fg(Color::DarkGray),
-        )),
+        Line::from(Span::styled("0", Style::default().fg(Color::DarkGray))),
         Line::from(Span::styled(
             format_compact(mid_val),
             Style::default().fg(Color::DarkGray),
