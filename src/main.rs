@@ -57,6 +57,36 @@ fn spawn_entity_create<T, Fut>(
     });
 }
 
+/// Spawn an Azure Monitor metrics fetch for the given entity.
+fn spawn_metrics_fetch(app: &mut App, entity_name: &str) {
+    app.metrics_pending = true;
+    if let Some(ref resource_id) = app.namespace_resource_id {
+        if let Some(ref cfg) = app.connection_config {
+            if let Some(credential) = cfg.azure_ad_credential() {
+                let rm = client::resource_manager::ResourceManagerClient::new(credential);
+                let resource_id = resource_id.clone();
+                let entity_name = entity_name.to_string();
+                let timespan = app.metrics_window.timespan().to_string();
+                let interval = app.metrics_window.interval().to_string();
+                let tx = app.bg_tx.clone();
+                tokio::spawn(async move {
+                    match rm
+                        .query_entity_metrics(&resource_id, &entity_name, &timespan, &interval)
+                        .await
+                    {
+                        Ok(metrics) => {
+                            let _ = tx.send(BgEvent::MetricsLoaded(metrics));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(BgEvent::MetricsFailed(e));
+                        }
+                    }
+                });
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Setup terminal
@@ -259,6 +289,29 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.loading = false;
                     app.last_refresh = Some(Instant::now());
                     app.set_status(format!("Loaded {} queues, {} topics", q_count, t_count));
+
+                    // Resolve ARM resource ID for Azure Monitor metrics (once per connection)
+                    if app.namespace_resource_id.is_none() {
+                        if let Some(ref cfg) = app.connection_config {
+                            if let Some(credential) = cfg.azure_ad_credential() {
+                                let fqdn = cfg.namespace.clone();
+                                let tx = app.bg_tx.clone();
+                                let rm = client::resource_manager::ResourceManagerClient::new(
+                                    credential,
+                                );
+                                tokio::spawn(async move {
+                                    match rm.resolve_namespace_resource_id(&fqdn).await {
+                                        Ok(id) => {
+                                            let _ = tx.send(BgEvent::NamespaceResourceIdResolved(id));
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(BgEvent::NamespaceResourceIdFailed(e));
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
                 }
                 BgEvent::DetailLoaded(detail) => {
                     app.detail_view = *detail;
@@ -357,6 +410,28 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.modal = ActiveModal::None;
                     app.bg_running = false;
                 }
+                BgEvent::NamespaceResourceIdResolved(id) => {
+                    app.namespace_resource_id = Some(id);
+                    app.metrics_available = true;
+                }
+                BgEvent::NamespaceResourceIdFailed(_) => {
+                    app.metrics_available = false;
+                }
+                BgEvent::MetricsLoaded(metrics) => {
+                    app.metrics_pending = false;
+                    // Only accept if entity still matches current selection
+                    let current_entity = app
+                        .flat_nodes
+                        .get(app.tree_selected)
+                        .map(|n| n.label.clone());
+                    if current_entity.as_deref() == Some(&metrics.entity_name) {
+                        app.entity_metrics = Some(metrics);
+                    }
+                }
+                BgEvent::MetricsFailed(_) => {
+                    app.metrics_pending = false;
+                    app.entity_metrics = None;
+                }
             }
         }
 
@@ -425,6 +500,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 if let Some(node) = app.flat_nodes.get(app.tree_selected) {
                     let mgmt = mgmt.clone();
                     let entity_type = node.entity_type.clone();
+                    let entity_type_for_metrics = entity_type.clone();
                     let path = node.path.clone();
                     let tx = app.bg_tx.clone();
 
@@ -495,7 +571,41 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             let _ = tx.send(BgEvent::DetailLoaded(Box::new(d)));
                         }
                     });
+
+                    // Fetch Azure Monitor metrics for queues and topics
+                    let metrics_entity_name = node.label.clone();
+                    if app.metrics_available && app.metrics_enabled {
+                        match entity_type_for_metrics {
+                            EntityType::Queue | EntityType::Topic => {
+                                spawn_metrics_fetch(&mut app, &metrics_entity_name);
+                            }
+                            _ => {
+                                app.entity_metrics = None;
+                            }
+                        }
+                    } else {
+                        app.entity_metrics = None;
+                    }
                 }
+            }
+        }
+
+        // Re-fetch metrics when cleared (e.g., window changed or toggled back on)
+        if app.metrics_available
+            && app.metrics_enabled
+            && app.entity_metrics.is_none()
+            && !app.metrics_pending
+            && app.tree_selected == last_selected
+        {
+            let fetch_target = app.flat_nodes.get(app.tree_selected).and_then(|node| {
+                if matches!(node.entity_type, EntityType::Queue | EntityType::Topic) {
+                    Some(node.label.clone())
+                } else {
+                    None
+                }
+            });
+            if let Some(entity_name) = fetch_target {
+                spawn_metrics_fetch(&mut app, &entity_name);
             }
         }
 

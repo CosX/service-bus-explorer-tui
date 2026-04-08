@@ -33,6 +33,7 @@ Built with Rust, [ratatui](https://ratatui.rs), and the Azure Service Bus REST A
 - Topic operations automatically fan out across all subscriptions
 - Delete individual messages from the messages panel with confirmation
 - Multiple saved connections with config persistence (SAS and Azure AD)
+- Azure Monitor metrics sparklines — view active and dead-letter message trends (1h/6h/24h/7d) for queues and topics (Azure AD only)
 - Azure AD (Microsoft Entra ID) authentication via default credential chain
 - Azure Service Bus emulator support (local development with `UseDevelopmentEmulator=true` connection strings)
 - Vim-style keybindings
@@ -243,6 +244,8 @@ The copied message preserves all custom properties and metadata while allowing y
 | `s`              | Send message to queue/topic        |
 | `p`              | Peek messages (prompts for count)  |
 | `d`              | Peek dead-letter queue             |
+| `m`              | Toggle Azure Monitor metrics       |
+| `M` (shift)      | Cycle metrics window (1h/6h/24h/7d)|
 | `P` (shift)      | Clear entity (delete / DLQ resend) |
 
 ### Messages panel

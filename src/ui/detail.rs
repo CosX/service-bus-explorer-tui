@@ -70,7 +70,7 @@ pub fn render_detail(frame: &mut Frame, app: &App, area: Rect) {
                 rows.push(make_row("Size (bytes)", &rt.size_in_bytes.to_string()));
             }
 
-            render_table(frame, area, block, rows);
+            render_table_with_metrics(frame, area, block, rows, &app.entity_metrics, app.metrics_window);
         }
         DetailView::Topic(desc, runtime) => {
             let mut rows = vec![
@@ -105,7 +105,7 @@ pub fn render_detail(frame: &mut Frame, app: &App, area: Rect) {
                 rows.push(make_row("Size (bytes)", &rt.size_in_bytes.to_string()));
             }
 
-            render_table(frame, area, block, rows);
+            render_table_with_metrics(frame, area, block, rows, &app.entity_metrics, app.metrics_window);
         }
         DetailView::Subscription(desc, runtime, rules) => {
             let mut rows = vec![
@@ -176,4 +176,57 @@ fn render_table(frame: &mut Frame, area: Rect, block: Block, rows: Vec<Row>) {
     .column_spacing(1);
 
     frame.render_widget(table, area);
+}
+
+use crate::app::MetricsWindow;
+use crate::client::models::EntityMetrics;
+
+fn render_table_with_metrics(
+    frame: &mut Frame,
+    area: Rect,
+    block: Block,
+    rows: Vec<Row>,
+    metrics: &Option<EntityMetrics>,
+    window: MetricsWindow,
+) {
+    match metrics {
+        Some(m) if !m.active_messages.is_empty() || !m.dead_letter_messages.is_empty() => {
+            let label = window.label();
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(8),
+                    Constraint::Length(4),
+                    Constraint::Length(4),
+                ])
+                .split(area);
+
+            render_table(frame, chunks[0], block, rows);
+
+            let active_sparkline = Sparkline::default()
+                .block(
+                    Block::default()
+                        .title(format!(" Active Messages ({}) ", label))
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::DarkGray)),
+                )
+                .data(&m.active_messages)
+                .style(Style::default().fg(Color::Green));
+            frame.render_widget(active_sparkline, chunks[1]);
+
+            let dlq_sparkline = Sparkline::default()
+                .block(
+                    Block::default()
+                        .title(format!(" Dead-letter ({}) ", label))
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::DarkGray)),
+                )
+                .data(&m.dead_letter_messages)
+                .style(Style::default().fg(Color::Red));
+            frame.render_widget(dlq_sparkline, chunks[2]);
+        }
+        _ => {
+            render_table(frame, area, block, rows);
+        }
+    }
 }

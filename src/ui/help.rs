@@ -46,6 +46,8 @@ pub fn render_help(frame: &mut Frame) {
         Line::from("  p              Peek messages (prompts for count)"),
         Line::from("  d              Peek dead-letter queue"),
         Line::from("  s              Send message"),
+        Line::from("  m              Toggle Azure Monitor metrics"),
+        Line::from("  M (shift)      Cycle metrics window (1h/6h/24h/7d)"),
         Line::from("  P (shift)      Clear entity (delete all / resend DLQ)"),
         Line::from(Span::styled(
             "                 (on topics: operates across all subs)",

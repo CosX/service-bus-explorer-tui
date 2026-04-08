@@ -1,6 +1,8 @@
+use crate::client::models::{EntityMetrics, MetricsResponse};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Azure subscription returned from ARM API.
 #[derive(Debug, Clone, Deserialize)]
@@ -21,6 +23,7 @@ struct SubscriptionListResponse {
 /// Azure Service Bus namespace resource.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NamespaceResource {
+    pub id: String,
     pub name: String,
     pub location: String,
     pub properties: NamespaceProperties,
@@ -46,6 +49,7 @@ pub struct DiscoveredNamespace {
     pub fqdn: String,
     pub name: String,
     pub subscription_name: String,
+    pub resource_id: String,
     pub location: String,
     pub status: String,
 }
@@ -227,6 +231,7 @@ impl ResourceManagerClient {
                             fqdn,
                             name: ns.name,
                             subscription_name: sub_name.clone(),
+                            resource_id: ns.id,
                             location: ns.location,
                             status: ns.properties.status,
                         });
@@ -252,6 +257,108 @@ impl ResourceManagerClient {
             namespaces: all_namespaces,
             errors,
         }
+    }
+
+    /// Resolve a namespace FQDN to its ARM resource ID.
+    ///
+    /// Iterates subscriptions and their namespaces to find the matching FQDN.
+    /// Returns the full ARM resource path, e.g.
+    /// `/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.ServiceBus/namespaces/{name}`.
+    pub async fn resolve_namespace_resource_id(&self, fqdn: &str) -> Result<String, String> {
+        let subscriptions = self.list_subscriptions().await?;
+
+        for sub in subscriptions {
+            let namespaces = match self.list_namespaces(&sub.subscription_id).await {
+                Ok(ns) => ns,
+                Err(_) => continue,
+            };
+            for ns in namespaces {
+                let ns_fqdn = extract_fqdn_from_endpoint(&ns.properties.service_bus_endpoint);
+                if ns_fqdn.eq_ignore_ascii_case(fqdn) {
+                    return Ok(ns.id);
+                }
+            }
+        }
+
+        Err(format!(
+            "Could not resolve ARM resource ID for namespace '{}'",
+            fqdn
+        ))
+    }
+
+    /// Query Azure Monitor for entity metrics (ActiveMessages, DeadletteredMessages).
+    pub async fn query_entity_metrics(
+        &self,
+        resource_id: &str,
+        entity_name: &str,
+        timespan: &str,
+        interval: &str,
+    ) -> Result<EntityMetrics, String> {
+        let token = self.get_token().await?;
+        let filter = format!("EntityName eq '{}'", entity_name);
+        let url = format!(
+            "https://management.azure.com{}/providers/microsoft.insights/metrics",
+            resource_id
+        );
+
+        let response = self
+            .http_client
+            .get(&url)
+            .bearer_auth(&token)
+            .query(&[
+                ("api-version", "2023-10-01"),
+                ("metricnames", "ActiveMessages,DeadletteredMessages"),
+                ("aggregation", "average"),
+                ("interval", interval),
+                ("timespan", timespan),
+                ("$filter", &filter),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("Metrics request failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("(no body)"));
+            return Err(format!("Metrics query failed ({}): {}", status, body));
+        }
+
+        let parsed: MetricsResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse metrics response: {}", e))?;
+
+        let mut active = Vec::new();
+        let mut dlq = Vec::new();
+
+        for metric in &parsed.value {
+            let data: Vec<u64> = metric
+                .timeseries
+                .first()
+                .map(|ts| {
+                    ts.data
+                        .iter()
+                        .map(|dp| dp.average.unwrap_or(0.0) as u64)
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            match metric.name.value.as_str() {
+                "ActiveMessages" => active = data,
+                "DeadletteredMessages" => dlq = data,
+                _ => {}
+            }
+        }
+
+        Ok(EntityMetrics {
+            active_messages: active,
+            dead_letter_messages: dlq,
+            entity_name: entity_name.to_string(),
+            fetched_at: Instant::now(),
+        })
     }
 }
 

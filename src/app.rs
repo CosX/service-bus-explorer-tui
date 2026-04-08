@@ -78,6 +78,16 @@ pub enum BgEvent {
     SubscriptionFilterUpdated {
         status: String,
     },
+    /// ARM resource ID resolved for Azure Monitor metrics.
+    NamespaceResourceIdResolved(String),
+    /// ARM resource ID resolution failed (non-fatal).
+    #[allow(dead_code)]
+    NamespaceResourceIdFailed(String),
+    /// Azure Monitor metrics loaded for an entity.
+    MetricsLoaded(EntityMetrics),
+    /// Azure Monitor metrics query failed (non-fatal).
+    #[allow(dead_code)]
+    MetricsFailed(String),
 }
 
 /// Which panel is currently focused.
@@ -253,6 +263,65 @@ pub struct App {
     pub copy_connection_list_state: ListState,
     pub copy_entity_list_state: ListState,
     pub copy_destination_entity: Option<String>,
+
+    // Azure Monitor metrics
+    pub namespace_resource_id: Option<String>,
+    pub entity_metrics: Option<EntityMetrics>,
+    pub metrics_available: bool,
+    pub metrics_enabled: bool,
+    pub metrics_window: MetricsWindow,
+    pub metrics_pending: bool,
+}
+
+/// Time window for Azure Monitor metrics queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetricsWindow {
+    OneHour,
+    SixHours,
+    TwentyFourHours,
+    SevenDays,
+}
+
+impl MetricsWindow {
+    /// Azure Monitor timespan parameter (ISO 8601 duration).
+    pub fn timespan(&self) -> &'static str {
+        match self {
+            Self::OneHour => "PT1H",
+            Self::SixHours => "PT6H",
+            Self::TwentyFourHours => "P1D",
+            Self::SevenDays => "P7D",
+        }
+    }
+
+    /// Azure Monitor interval (granularity) appropriate for this window.
+    pub fn interval(&self) -> &'static str {
+        match self {
+            Self::OneHour => "PT1M",
+            Self::SixHours => "PT5M",
+            Self::TwentyFourHours => "PT1H",
+            Self::SevenDays => "PT1H",
+        }
+    }
+
+    /// Human-readable label for UI display.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::OneHour => "1h",
+            Self::SixHours => "6h",
+            Self::TwentyFourHours => "24h",
+            Self::SevenDays => "7d",
+        }
+    }
+
+    /// Cycle to the next window.
+    pub fn next(self) -> Self {
+        match self {
+            Self::OneHour => Self::SixHours,
+            Self::SixHours => Self::TwentyFourHours,
+            Self::TwentyFourHours => Self::SevenDays,
+            Self::SevenDays => Self::OneHour,
+        }
+    }
 }
 
 impl App {
@@ -317,6 +386,12 @@ impl App {
             copy_connection_list_state: ListState::default(),
             copy_entity_list_state: ListState::default(),
             copy_destination_entity: None,
+            namespace_resource_id: None,
+            entity_metrics: None,
+            metrics_available: false,
+            metrics_enabled: true,
+            metrics_window: MetricsWindow::SixHours,
+            metrics_pending: false,
         }
     }
 
@@ -393,6 +468,12 @@ impl App {
         self.focus = FocusPanel::Tree;
         self.loading = false;
         self.bg_running = false;
+
+        // Clear metrics state
+        self.namespace_resource_id = None;
+        self.entity_metrics = None;
+        self.metrics_available = false;
+        self.metrics_enabled = true;
 
         // Set status
         self.set_status("Disconnected. Press 'c' to connect, '?' for help");

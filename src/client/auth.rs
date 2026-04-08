@@ -170,6 +170,14 @@ impl ConnectionConfig {
         Ok(format!("Bearer {}", token.token.secret()))
     }
 
+    /// Returns the Azure AD credential if this connection uses Azure AD auth.
+    pub fn azure_ad_credential(&self) -> Option<Arc<dyn TokenCredential>> {
+        match &self.auth_mode {
+            AuthMode::AzureAd { credential } => Some(credential.clone()),
+            _ => None,
+        }
+    }
+
     /// Generate an authorization header scoped to the namespace root.
     ///
     /// For SAS: generates an HMAC-SHA256 token valid for 1 hour.

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 
 // ──────────────────────────── Entity Models ────────────────────────────
 
@@ -337,4 +338,48 @@ pub struct FlatNode {
     pub has_children: bool,
     pub message_count: Option<i64>,
     pub dlq_count: Option<i64>,
+}
+
+// ──────────────────────────── Azure Monitor Metrics ────────────────────────────
+
+/// Top-level Azure Monitor metrics response.
+#[derive(Debug, Deserialize)]
+pub struct MetricsResponse {
+    pub value: Vec<MetricValue>,
+}
+
+/// A single metric from the Azure Monitor response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricValue {
+    pub name: MetricName,
+    pub timeseries: Vec<MetricTimeSeries>,
+}
+
+/// Metric name descriptor.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricName {
+    pub value: String,
+}
+
+/// A time series from Azure Monitor.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricTimeSeries {
+    pub data: Vec<MetricDataPoint>,
+}
+
+/// A single data point from Azure Monitor.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricDataPoint {
+    #[serde(rename = "timeStamp")]
+    pub timestamp: String,
+    pub average: Option<f64>,
+}
+
+/// Processed metrics ready for sparkline rendering.
+#[derive(Debug, Clone)]
+pub struct EntityMetrics {
+    pub active_messages: Vec<u64>,
+    pub dead_letter_messages: Vec<u64>,
+    pub entity_name: String,
+    pub fetched_at: Instant,
 }
