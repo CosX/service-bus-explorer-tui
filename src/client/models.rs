@@ -373,6 +373,7 @@ pub struct MetricDataPoint {
     #[serde(rename = "timeStamp")]
     pub timestamp: String,
     pub average: Option<f64>,
+    pub total: Option<f64>,
 }
 
 /// Processed metrics ready for sparkline rendering.
@@ -380,6 +381,9 @@ pub struct MetricDataPoint {
 pub struct EntityMetrics {
     pub active_messages: Vec<u64>,
     pub dead_letter_messages: Vec<u64>,
+    pub incoming_messages: Vec<u64>,
+    pub outgoing_messages: Vec<u64>,
+    pub scheduled_messages: Vec<u64>,
     pub entity_name: String,
     pub fetched_at: Instant,
 }

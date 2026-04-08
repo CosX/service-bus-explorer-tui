@@ -43,7 +43,8 @@ src/
     ├── tree.rs          # Entity tree with inline message/DLQ counts
     ├── messages.rs      # Message list + detail view + inline edit rendering
     ├── modals.rs        # Connection, form, confirm, clear-options, peek-count dialogs
-    ├── detail.rs        # Entity properties/runtime info panel
+    ├── detail.rs        # Entity properties/runtime info panel + sparkline previews
+    ├── metrics_detail.rs # Full-screen metrics overlay with braille line charts
     ├── status_bar.rs    # Bottom status bar
     ├── help.rs          # Full keyboard shortcut overlay (`?` key)
     └── sanitize.rs      # Terminal escape injection prevention (CSI/OSC stripping)
@@ -82,6 +83,7 @@ Forms use `input_fields: Vec<(String, String)>` with index-based field navigatio
 ### Keybindings (actual, not README)
 **Tree panel:** `j/k` nav, `h/l` collapse/expand, `g/G` jump, `r/F5` refresh, `s` send, `p` peek (prompts count), `d` peek DLQ, `n` create entity, `x` delete entity, `P` clear options
 **Messages panel:** `j/k` nav, `Enter` view detail, `Esc` close detail, `1/2` switch tabs, `e` inline edit & resend, `R` bulk resend DLQ, `D` bulk delete
+**Metrics:** `m` toggle metrics on/off, `M` cycle time window (1h/6h/24h/7d), `V` open metrics detail overlay (braille line charts for all 5 metrics)
 **Note:** `x` deletes entities (not `d`); `d` peeks DLQ from tree
 
 ### Connection Flow
@@ -92,6 +94,23 @@ Forms use `input_fields: Vec<(String, String)>` with index-based field navigatio
 
 ### Terminal Safety
 `ui/sanitize.rs` strips CSI/OSC escape sequences and control characters from message bodies before rendering. Always use `sanitize_for_terminal()` when displaying untrusted Service Bus message content.
+
+### Azure Monitor Metrics
+Requires Azure AD authentication (not available with SAS keys). The ARM resource ID is resolved once per connection via `ResourceManagerClient::resolve_namespace_resource_id()`.
+
+**Two-tier UI:**
+- **Detail pane preview**: small sparkline charts for Active Messages and Dead-letter, rendered inline below entity properties (`detail.rs`)
+- **Metrics detail overlay** (`V` key): full-screen modal with braille dot line charts (`Chart` + `Marker::Braille` + `GraphType::Line`) for all 5 metrics, with y-axis labels and cur/peak values (`metrics_detail.rs`)
+
+**Five metrics fetched from Azure Monitor** (via `resource_manager.rs:query_entity_metrics()`):
+- `ActiveMessages`, `DeadletteredMessages`, `ScheduledMessages` — gauge metrics (average aggregation)
+- `IncomingMessages`, `OutgoingMessages` — throughput metrics (total aggregation)
+
+Gauge and throughput metrics require different aggregation types, so they are fetched in two parallel requests using `tokio::join!`.
+
+**Time windows** (`MetricsWindow` enum): 1h (PT1M interval), 6h (PT5M), 24h (PT1H), 7d (PT1H). Cycled with `M` key. The overlay also supports `M` to cycle while open.
+
+**App state**: `metrics_available` (ARM ID resolved), `metrics_enabled` (user toggle), `metrics_window`, `metrics_pending` (fetch in progress), `entity_metrics` (cached data). Metrics are re-fetched when the selected entity changes, the window cycles, or metrics are toggled back on.
 
 ## Adding New Operations
 

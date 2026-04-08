@@ -7,6 +7,7 @@ use crate::app::{ActiveModal, App};
 use super::detail::render_detail;
 use super::help::render_help;
 use super::messages::render_messages;
+use super::metrics_detail::render_metrics_detail;
 use super::modals::render_modal;
 use super::status_bar::render_status_bar;
 use super::tree::render_tree;
@@ -66,5 +67,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Render help overlay
     if app.modal == ActiveModal::Help {
         render_help(frame);
+    }
+
+    // Render metrics detail overlay
+    if app.modal == ActiveModal::MetricsDetail {
+        render_metrics_detail(frame, app);
     }
 }

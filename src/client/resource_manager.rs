@@ -286,7 +286,7 @@ impl ResourceManagerClient {
         ))
     }
 
-    /// Query Azure Monitor for entity metrics (ActiveMessages, DeadletteredMessages).
+    /// Query Azure Monitor for entity metrics.
     pub async fn query_entity_metrics(
         &self,
         resource_id: &str,
@@ -301,54 +301,117 @@ impl ResourceManagerClient {
             resource_id
         );
 
-        let response = self
+        // Fetch gauge metrics (average aggregation) and throughput metrics (total aggregation)
+        // in parallel since Azure Monitor requires separate aggregation types.
+        let gauge_request = self
             .http_client
             .get(&url)
             .bearer_auth(&token)
             .query(&[
                 ("api-version", "2023-10-01"),
-                ("metricnames", "ActiveMessages,DeadletteredMessages"),
+                (
+                    "metricnames",
+                    "ActiveMessages,DeadletteredMessages,ScheduledMessages",
+                ),
                 ("aggregation", "average"),
                 ("interval", interval),
                 ("timespan", timespan),
                 ("$filter", &filter),
             ])
-            .send()
-            .await
-            .map_err(|e| format!("Metrics request failed: {}", e))?;
+            .send();
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
+        let throughput_request = self
+            .http_client
+            .get(&url)
+            .bearer_auth(&token)
+            .query(&[
+                ("api-version", "2023-10-01"),
+                ("metricnames", "IncomingMessages,OutgoingMessages"),
+                ("aggregation", "total"),
+                ("interval", interval),
+                ("timespan", timespan),
+                ("$filter", &filter),
+            ])
+            .send();
+
+        let (gauge_resp, throughput_resp) = tokio::join!(gauge_request, throughput_request);
+
+        let gauge_resp =
+            gauge_resp.map_err(|e| format!("Gauge metrics request failed: {}", e))?;
+        let throughput_resp =
+            throughput_resp.map_err(|e| format!("Throughput metrics request failed: {}", e))?;
+
+        if !gauge_resp.status().is_success() {
+            let status = gauge_resp.status();
+            let body = gauge_resp
                 .text()
                 .await
                 .unwrap_or_else(|_| String::from("(no body)"));
-            return Err(format!("Metrics query failed ({}): {}", status, body));
+            return Err(format!("Gauge metrics query failed ({}): {}", status, body));
         }
 
-        let parsed: MetricsResponse = response
+        if !throughput_resp.status().is_success() {
+            let status = throughput_resp.status();
+            let body = throughput_resp
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("(no body)"));
+            return Err(format!(
+                "Throughput metrics query failed ({}): {}",
+                status, body
+            ));
+        }
+
+        let gauge_parsed: MetricsResponse = gauge_resp
             .json()
             .await
-            .map_err(|e| format!("Failed to parse metrics response: {}", e))?;
+            .map_err(|e| format!("Failed to parse gauge metrics: {}", e))?;
+
+        let throughput_parsed: MetricsResponse = throughput_resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse throughput metrics: {}", e))?;
 
         let mut active = Vec::new();
         let mut dlq = Vec::new();
+        let mut scheduled = Vec::new();
+        let mut incoming = Vec::new();
+        let mut outgoing = Vec::new();
 
-        for metric in &parsed.value {
-            let data: Vec<u64> = metric
-                .timeseries
-                .first()
-                .map(|ts| {
-                    ts.data
-                        .iter()
-                        .map(|dp| dp.average.unwrap_or(0.0) as u64)
-                        .collect()
-                })
-                .unwrap_or_default();
+        let extract_data =
+            |metric: &crate::client::models::MetricValue, use_total: bool| -> Vec<u64> {
+                metric
+                    .timeseries
+                    .first()
+                    .map(|ts| {
+                        ts.data
+                            .iter()
+                            .map(|dp| {
+                                let val = if use_total {
+                                    dp.total.unwrap_or(0.0)
+                                } else {
+                                    dp.average.unwrap_or(0.0)
+                                };
+                                val as u64
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
 
+        for metric in &gauge_parsed.value {
             match metric.name.value.as_str() {
-                "ActiveMessages" => active = data,
-                "DeadletteredMessages" => dlq = data,
+                "ActiveMessages" => active = extract_data(metric, false),
+                "DeadletteredMessages" => dlq = extract_data(metric, false),
+                "ScheduledMessages" => scheduled = extract_data(metric, false),
+                _ => {}
+            }
+        }
+
+        for metric in &throughput_parsed.value {
+            match metric.name.value.as_str() {
+                "IncomingMessages" => incoming = extract_data(metric, true),
+                "OutgoingMessages" => outgoing = extract_data(metric, true),
                 _ => {}
             }
         }
@@ -356,6 +419,9 @@ impl ResourceManagerClient {
         Ok(EntityMetrics {
             active_messages: active,
             dead_letter_messages: dlq,
+            incoming_messages: incoming,
+            outgoing_messages: outgoing,
+            scheduled_messages: scheduled,
             entity_name: entity_name.to_string(),
             fetched_at: Instant::now(),
         })

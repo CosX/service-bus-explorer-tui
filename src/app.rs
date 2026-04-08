@@ -140,6 +140,7 @@ pub enum ActiveModal {
         is_topic: bool,
     },
     Help,
+    MetricsDetail,
     CopySelectConnection,
     CopySelectEntity,
     CopyEditMessage,

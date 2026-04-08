@@ -192,6 +192,20 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
                 app.set_status("Metrics require Azure AD connection");
             }
         }
+        // 'V' = open metrics detail overlay
+        KeyCode::Char('V') => {
+            if app.metrics_available && app.metrics_enabled {
+                if app.entity_metrics.is_some() {
+                    app.modal = ActiveModal::MetricsDetail;
+                } else {
+                    app.set_status("No metrics loaded — select a queue or topic first");
+                }
+            } else if !app.metrics_available {
+                app.set_status("Metrics require Azure AD connection");
+            } else {
+                app.set_status("Metrics are disabled — press m to enable");
+            }
+        }
         // 's' = send message to selected entity
         KeyCode::Char('s') => {
             if !block_if_bg_running(app, BG_BUSY_MSG) {

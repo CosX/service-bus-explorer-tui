@@ -138,7 +138,7 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
                 "F2 to copy | Esc to cancel",
             )
         }
-        ActiveModal::Help | ActiveModal::None => {}
+        ActiveModal::Help | ActiveModal::MetricsDetail | ActiveModal::None => {}
     }
 }
 

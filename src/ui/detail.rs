@@ -181,6 +181,17 @@ fn render_table(frame: &mut Frame, area: Rect, block: Block, rows: Vec<Row>) {
 use crate::app::MetricsWindow;
 use crate::client::models::EntityMetrics;
 
+/// Format a sparkline title with the metric name, time window, and latest/peak values.
+pub fn sparkline_title(name: &str, label: &str, data: &[u64]) -> String {
+    let latest = data.last().copied().unwrap_or(0);
+    let peak = data.iter().copied().max().unwrap_or(0);
+    if latest == peak {
+        format!(" {} ({}) cur:{} ", name, label, latest)
+    } else {
+        format!(" {} ({}) cur:{} peak:{} ", name, label, latest, peak)
+    }
+}
+
 fn render_table_with_metrics(
     frame: &mut Frame,
     area: Rect,
@@ -206,7 +217,7 @@ fn render_table_with_metrics(
             let active_sparkline = Sparkline::default()
                 .block(
                     Block::default()
-                        .title(format!(" Active Messages ({}) ", label))
+                        .title(sparkline_title("Active", label, &m.active_messages))
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::DarkGray)),
                 )
@@ -217,7 +228,7 @@ fn render_table_with_metrics(
             let dlq_sparkline = Sparkline::default()
                 .block(
                     Block::default()
-                        .title(format!(" Dead-letter ({}) ", label))
+                        .title(sparkline_title("Dead-letter", label, &m.dead_letter_messages))
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(Color::DarkGray)),
                 )
