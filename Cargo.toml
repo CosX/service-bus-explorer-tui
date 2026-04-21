@@ -48,8 +48,8 @@ base64 = "0.22"
 urlencoding = "2"
 
 # Azure AD authentication
-azure_identity = "0.33"
-azure_core = "0.33"
+azure_identity = "0.34"
+azure_core = "0.34"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
