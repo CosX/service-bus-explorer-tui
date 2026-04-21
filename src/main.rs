@@ -626,7 +626,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
 
                 let credential: std::sync::Arc<dyn azure_core::credentials::TokenCredential> =
                     match azure_identity::DeveloperToolsCredential::new(None) {
-                        Ok(cred) => cred,
+                        Ok(cred) => client::auth::CachedTokenCredential::new(cred),
                         Err(e) => {
                             let _ = bg_tx.send(BgEvent::DiscoveryFailed(format!(
                                 "Failed to create Azure credential: {}. Try 'az login'",

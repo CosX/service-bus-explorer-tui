@@ -193,6 +193,9 @@ impl ConnectionConfig {
     ///
     /// `namespace` should be the fully-qualified namespace, e.g.
     /// `mynamespace.servicebus.windows.net`.
+    ///
+    /// The credential is automatically wrapped in [`CachedTokenCredential`] to
+    /// avoid spawning a Python process on every API call.
     pub fn from_azure_ad(namespace: &str, credential: Arc<dyn TokenCredential>) -> Self {
         let namespace = namespace
             .trim_start_matches("sb://")
@@ -202,7 +205,9 @@ impl ConnectionConfig {
         Self {
             namespace,
             endpoint,
-            auth_mode: AuthMode::AzureAd { credential },
+            auth_mode: AuthMode::AzureAd {
+                credential: CachedTokenCredential::new(credential),
+            },
             is_emulator: false,
         }
     }
