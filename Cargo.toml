@@ -53,6 +53,10 @@ azure_core = "0.34"
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
+time = "0.3"
+
+# Async utilities
+async-trait = "0.1"
 
 # Error handling
 anyhow = "1"

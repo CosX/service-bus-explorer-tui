@@ -2317,6 +2317,7 @@ name = "service-bus-explorer-tui"
 version = "0.0.18"
 dependencies = [
  "anyhow",
+ "async-trait",
  "azure_core",
  "azure_identity",
  "base64",
@@ -2331,6 +2332,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "toml",
  "tracing",
