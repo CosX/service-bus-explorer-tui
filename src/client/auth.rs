@@ -4,8 +4,10 @@ use base64::Engine;
 use chrono::Utc;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
+use tokio::sync::RwLock;
 
-use azure_core::credentials::TokenCredential;
+use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions};
+use time::OffsetDateTime;
 
 use super::error::{Result, ServiceBusError};
 
@@ -13,6 +15,74 @@ type HmacSha256 = Hmac<Sha256>;
 
 /// The Service Bus token audience used for Azure AD authentication.
 const SERVICE_BUS_SCOPE: &str = "https://servicebus.azure.net/.default";
+
+/// Refresh the token 5 minutes before it expires to avoid edge-of-expiry failures.
+const TOKEN_REFRESH_MARGIN_SECS: i64 = 300;
+
+/// Caching wrapper around a [`TokenCredential`].
+///
+/// `AzureCliCredential` spawns a Python process (`az account get-access-token`)
+/// on every `get_token` call. Without caching, operations like peek (2N calls)
+/// or purge (one per message) flood the system with Python processes.
+///
+/// This wrapper stores the most recent [`AccessToken`] and reuses it until it
+/// is within [`TOKEN_REFRESH_MARGIN_SECS`] of expiry.
+pub struct CachedTokenCredential {
+    inner: Arc<dyn TokenCredential>,
+    cached: RwLock<Option<AccessToken>>,
+}
+
+impl std::fmt::Debug for CachedTokenCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CachedTokenCredential")
+    }
+}
+
+impl CachedTokenCredential {
+    /// Wrap a credential with a token cache.
+    pub fn new(inner: Arc<dyn TokenCredential>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            cached: RwLock::new(None),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl TokenCredential for CachedTokenCredential {
+    async fn get_token(
+        &self,
+        scopes: &[&str],
+        options: Option<TokenRequestOptions<'_>>,
+    ) -> azure_core::Result<AccessToken> {
+        // Fast path: read lock, check if cached token is still fresh.
+        {
+            let guard = self.cached.read().await;
+            if let Some(ref token) = *guard {
+                let now = OffsetDateTime::now_utc();
+                let expires = token.expires_on;
+                if expires - now > time::Duration::seconds(TOKEN_REFRESH_MARGIN_SECS) {
+                    return Ok(token.clone());
+                }
+            }
+        }
+
+        // Slow path: acquire write lock and refresh.
+        let mut guard = self.cached.write().await;
+        // Double-check: another task may have refreshed while we waited for the write lock.
+        if let Some(ref token) = *guard {
+            let now = OffsetDateTime::now_utc();
+            let expires = token.expires_on;
+            if expires - now > time::Duration::seconds(TOKEN_REFRESH_MARGIN_SECS) {
+                return Ok(token.clone());
+            }
+        }
+
+        let token = self.inner.get_token(scopes, options).await?;
+        *guard = Some(token.clone());
+        Ok(token)
+    }
+}
 
 /// Authentication mode — either SAS key-based or Azure AD (Microsoft Entra ID).
 #[derive(Clone)]
