@@ -314,6 +314,16 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
                 }
             }
         }
+        // 'L' (shift+l) = purge DLQ for entire namespace
+        KeyCode::Char('L') => {
+            if !block_if_bg_running(app, BG_BUSY_MSG) {
+                if app.management.is_some() {
+                    app.modal = ActiveModal::ConfirmPurgeAllDlq;
+                } else {
+                    app.set_status("Not connected");
+                }
+            }
+        }
         // 'f' = edit subscription SQL filter rule
         KeyCode::Char('f') => {
             if !block_if_bg_running(app, BG_BUSY_MSG) {

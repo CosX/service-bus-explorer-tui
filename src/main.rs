@@ -893,6 +893,145 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
             }
         }
 
+        // Purge all DLQs across the entire namespace
+        if app.status_message == "Purging all DLQ..."
+            && app.data_plane.is_some()
+            && app.management.is_some()
+            && !app.bg_running
+        {
+            let dp = app.data_plane.clone().unwrap();
+            let mgmt = app.management.clone().unwrap();
+            let tx = app.bg_tx.clone();
+            let cancel = app.new_cancel_token();
+
+            app.bg_running = true;
+            app.modal = ActiveModal::None;
+            app.set_status("Discovering entities...");
+
+            tokio::spawn(async move {
+                // Build DLQ paths for all queues and all topic subscriptions.
+                let mut dlq_paths: Vec<String> = Vec::new();
+
+                match mgmt.list_queues_with_counts().await {
+                    Ok(queues) => {
+                        for (q, _, _) in &queues {
+                            dlq_paths.push(format!("{}/$deadletterqueue", q.name));
+                        }
+                    }
+                    Err(e) => {
+                        send_failed(&tx, format!("Failed to list queues: {}", e));
+                        return;
+                    }
+                }
+
+                match mgmt.list_topics().await {
+                    Ok(topics) => {
+                        for t in &topics {
+                            match mgmt.list_subscriptions(&t.name).await {
+                                Ok(subs) => {
+                                    for s in &subs {
+                                        dlq_paths.push(format!(
+                                            "{}/subscriptions/{}/$deadletterqueue",
+                                            t.name, s.name
+                                        ));
+                                    }
+                                }
+                                Err(e) => {
+                                    send_failed(
+                                        &tx,
+                                        format!(
+                                            "Failed to list subscriptions for {}: {}",
+                                            t.name, e
+                                        ),
+                                    );
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        send_failed(&tx, format!("Failed to list topics: {}", e));
+                        return;
+                    }
+                }
+
+                if dlq_paths.is_empty() {
+                    let _ = tx.send(BgEvent::PurgeComplete { count: 0 });
+                    return;
+                }
+
+                let _ = tx.send(BgEvent::Progress(format!(
+                    "Purging DLQ across {} path(s) (Esc to cancel)...",
+                    dlq_paths.len()
+                )));
+
+                let (progress_tx, mut progress_rx) =
+                    tokio::sync::mpsc::unbounded_channel::<u64>();
+                let tx2 = tx.clone();
+                let progress_task = tokio::spawn(async move {
+                    let mut last_reported = 0u64;
+                    while let Some(n) = progress_rx.recv().await {
+                        if n >= last_reported + 50 {
+                            last_reported = n;
+                            let _ = tx2.send(BgEvent::Progress(format!(
+                                "Deleted {} DLQ messages... (Esc to cancel)",
+                                n
+                            )));
+                        }
+                    }
+                });
+
+                let mut count = 0u64;
+                for path in &dlq_paths {
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    match dp
+                        .purge_concurrent(
+                            path,
+                            32,
+                            Some(cancel.clone()),
+                            Some(progress_tx.clone()),
+                        )
+                        .await
+                    {
+                        Ok(n) => count += n,
+                        Err(e) => {
+                            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                                let _ = tx.send(BgEvent::Cancelled {
+                                    message: format!(
+                                        "Cancelled after deleting {} DLQ messages",
+                                        count
+                                    ),
+                                });
+                            } else {
+                                send_failed(
+                                    &tx,
+                                    format!(
+                                        "DLQ purge failed after {} messages: {}",
+                                        count, e
+                                    ),
+                                );
+                            }
+                            drop(progress_tx);
+                            let _ = progress_task.await;
+                            return;
+                        }
+                    }
+                }
+
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = tx.send(BgEvent::Cancelled {
+                        message: format!("Cancelled after deleting {} DLQ messages", count),
+                    });
+                } else {
+                    let _ = tx.send(BgEvent::PurgeComplete { count });
+                }
+                drop(progress_tx);
+                let _ = progress_task.await;
+            });
+        }
+
         // Delete entity (spawned)
         if app.status_message == "Deleting..." {
             if let ActiveModal::ConfirmDelete(ref path) = app.modal {

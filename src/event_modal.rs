@@ -242,6 +242,15 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
             }
             _ => {}
         },
+        ActiveModal::ConfirmPurgeAllDlq => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                app.set_status("Purging all DLQ...");
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                app.modal = ActiveModal::None;
+            }
+            _ => {}
+        },
         ActiveModal::ClearOptions { .. } => match key.code {
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 app.set_status("Clearing (delete)...");

@@ -119,6 +119,9 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
         ActiveModal::ClearOptions { entity_path, .. } => {
             render_clear_options(frame, entity_path);
         }
+        ActiveModal::ConfirmPurgeAllDlq => {
+            render_confirm_purge_all_dlq(frame);
+        }
         ActiveModal::NamespaceDiscovery { state } => render_namespace_discovery(frame, app, state),
         ActiveModal::CopySelectConnection => render_copy_select_connection(frame, app),
         ActiveModal::CopySelectEntity => render_copy_select_entity(frame, app),
@@ -778,6 +781,49 @@ fn render_clear_options(frame: &mut Frame, entity_path: &str) {
             "Esc to cancel",
             Style::default().fg(Color::DarkGray),
         )),
+    ];
+
+    render_centered_lines(frame, inner, lines);
+}
+
+fn render_confirm_purge_all_dlq(frame: &mut Frame) {
+    let area = centered_rect(58, 30, frame.area());
+    let inner = render_popup_block(
+        frame,
+        area,
+        " Purge ALL Dead-Letter Queues ".to_string(),
+        Color::Red,
+    );
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "This will DELETE all dead-letter messages",
+            Style::default().fg(Color::Red).bold(),
+        )),
+        Line::from(Span::styled(
+            "across every queue and subscription",
+            Style::default().fg(Color::Red).bold(),
+        )),
+        Line::from(Span::styled(
+            "in the entire namespace.",
+            Style::default().fg(Color::Red).bold(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "This action cannot be undone.",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  [Y] ", Style::default().fg(Color::Red).bold()),
+            Span::styled("Yes, purge all DLQs", Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [N] ", Style::default().fg(Color::Green).bold()),
+            Span::styled("Cancel", Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
     ];
 
     render_centered_lines(frame, inner, lines);

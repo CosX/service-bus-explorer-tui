@@ -144,6 +144,7 @@ pub enum ActiveModal {
     CopySelectConnection,
     CopySelectEntity,
     CopyEditMessage,
+    ConfirmPurgeAllDlq,
 }
 
 /// State of the namespace discovery modal.
