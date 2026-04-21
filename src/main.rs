@@ -965,8 +965,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     dlq_paths.len()
                 )));
 
-                let (progress_tx, mut progress_rx) =
-                    tokio::sync::mpsc::unbounded_channel::<u64>();
+                let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
                 let tx2 = tx.clone();
                 let progress_task = tokio::spawn(async move {
                     let mut last_reported = 0u64;
@@ -987,12 +986,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                         break;
                     }
                     match dp
-                        .purge_concurrent(
-                            path,
-                            32,
-                            Some(cancel.clone()),
-                            Some(progress_tx.clone()),
-                        )
+                        .purge_concurrent(path, 32, Some(cancel.clone()), Some(progress_tx.clone()))
                         .await
                     {
                         Ok(n) => count += n,
@@ -1007,10 +1001,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             } else {
                                 send_failed(
                                     &tx,
-                                    format!(
-                                        "DLQ purge failed after {} messages: {}",
-                                        count, e
-                                    ),
+                                    format!("DLQ purge failed after {} messages: {}", count, e),
                                 );
                             }
                             drop(progress_tx);
