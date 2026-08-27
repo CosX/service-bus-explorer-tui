@@ -1,8 +1,14 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{ActiveModal, App, DiscoveryState};
+use crate::app::{ActiveModal, App, ClearAction, ClearScope, DiscoveryState, PendingClear};
 use crate::client::entity_path;
 use crate::client::models::EntityType;
+
+/// Record the confirmed clear operation and raise its dispatch sentinel.
+fn start_clear(app: &mut App, scope: ClearScope, action: ClearAction) {
+    app.pending_clear = Some(PendingClear { scope, action });
+    app.set_status(action.sentinel());
+}
 
 fn move_selection_up(selected: &mut usize) {
     if *selected > 0 {
@@ -251,17 +257,33 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
             }
             _ => {}
         },
-        ActiveModal::ClearOptions { .. } => match key.code {
-            KeyCode::Char('d') | KeyCode::Char('D') => {
-                app.set_status("Clearing (delete)...");
+        ActiveModal::ClearOptions { ref scope } => {
+            let action = match key.code {
+                KeyCode::Char('d') | KeyCode::Char('D') => Some(ClearAction::DeleteActive),
+                KeyCode::Char('l') | KeyCode::Char('L') => Some(ClearAction::DeleteDlq),
+                KeyCode::Char('r') | KeyCode::Char('R') => Some(ClearAction::ResendDlq),
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    app.modal = ActiveModal::None;
+                    return;
+                }
+                _ => None,
+            };
+            if let Some(action) = action {
+                let scope = scope.clone();
+                if scope.is_batch() {
+                    // Namespace-wide clears get an extra confirmation step.
+                    app.modal = ActiveModal::ConfirmClearBatch { scope, action };
+                } else {
+                    start_clear(app, scope, action);
+                }
             }
-            KeyCode::Char('l') | KeyCode::Char('L') => {
-                app.set_status("Clearing (delete DLQ)...");
+        }
+        ActiveModal::ConfirmClearBatch { ref scope, action } => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let (scope, action) = (scope.clone(), *action);
+                start_clear(app, scope, action);
             }
-            KeyCode::Char('r') | KeyCode::Char('R') => {
-                app.set_status("Clearing (resend)...");
-            }
-            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 app.modal = ActiveModal::None;
             }
             _ => {}

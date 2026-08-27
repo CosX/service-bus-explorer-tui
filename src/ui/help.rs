@@ -49,7 +49,7 @@ pub fn render_help(frame: &mut Frame) {
         Line::from("  m              Toggle Azure Monitor metrics"),
         Line::from("  M (shift)      Cycle metrics window (1h/6h/24h/7d)"),
         Line::from("  V (shift)      Open metrics detail overlay"),
-        Line::from("  P (shift)      Clear entity (delete all / resend DLQ)"),
+        Line::from("  P (shift)      Clear entity, or all queues/topics on a folder"),
         Line::from(Span::styled(
             "                 (on topics: operates across all subs)",
             Style::default().fg(Color::DarkGray),

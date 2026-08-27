@@ -102,6 +102,72 @@ pub enum FocusPanel {
     Messages,
 }
 
+/// What a clear operation targets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClearScope {
+    /// A single queue or subscription.
+    Entity(String),
+    /// A topic; fans out across all of its subscriptions.
+    Topic(String),
+    /// Every queue in the namespace.
+    AllQueues,
+    /// Every topic in the namespace, fanned out across their subscriptions.
+    AllTopics,
+}
+
+impl ClearScope {
+    /// Human-readable target for modal titles and status messages.
+    pub fn label(&self) -> &str {
+        match self {
+            ClearScope::Entity(path) | ClearScope::Topic(path) => path,
+            ClearScope::AllQueues => "ALL queues",
+            ClearScope::AllTopics => "ALL topics",
+        }
+    }
+
+    /// Namespace-wide scopes are confirmed before they run.
+    pub fn is_batch(&self) -> bool {
+        matches!(self, ClearScope::AllQueues | ClearScope::AllTopics)
+    }
+}
+
+/// Which clear operation to run against a [`ClearScope`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClearAction {
+    /// Delete all active messages.
+    DeleteActive,
+    /// Delete all dead-letter messages.
+    DeleteDlq,
+    /// Resend all dead-letter messages to their main entity.
+    ResendDlq,
+}
+
+impl ClearAction {
+    /// Status sentinel dispatched in `main.rs` for this action.
+    pub fn sentinel(self) -> &'static str {
+        match self {
+            ClearAction::DeleteActive => "Clearing (delete)...",
+            ClearAction::DeleteDlq => "Clearing (delete DLQ)...",
+            ClearAction::ResendDlq => "Clearing (resend)...",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            ClearAction::DeleteActive => "Delete ALL active messages",
+            ClearAction::DeleteDlq => "Delete ALL dead-letter messages",
+            ClearAction::ResendDlq => "Resend ALL DLQ messages to their main entity",
+        }
+    }
+}
+
+/// A clear operation that has been confirmed and is awaiting dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingClear {
+    pub scope: ClearScope,
+    pub action: ClearAction,
+}
+
 /// Active modal overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActiveModal {
@@ -139,9 +205,11 @@ pub enum ActiveModal {
     PeekCountInput,
     EditResend,
     ClearOptions {
-        entity_path: String,
-        base_entity_path: String,
-        is_topic: bool,
+        scope: ClearScope,
+    },
+    ConfirmClearBatch {
+        scope: ClearScope,
+        action: ClearAction,
     },
     Help,
     MetricsDetail,
@@ -277,6 +345,8 @@ pub struct App {
     pub metrics_enabled: bool,
     pub metrics_window: MetricsWindow,
     pub metrics_pending: bool,
+    /// Clear operation confirmed by the user, consumed by the dispatcher.
+    pub pending_clear: Option<PendingClear>,
 }
 
 /// Time window for Azure Monitor metrics queries.
@@ -398,6 +468,7 @@ impl App {
             metrics_enabled: true,
             metrics_window: MetricsWindow::SixHours,
             metrics_pending: false,
+            pending_clear: None,
         }
     }
 

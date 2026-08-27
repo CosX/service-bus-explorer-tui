@@ -1,7 +1,7 @@
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::Duration;
 
-use crate::app::{ActiveModal, App, FocusPanel, MessageTab};
+use crate::app::{ActiveModal, App, ClearScope, FocusPanel, MessageTab};
 use crate::client::models::EntityType;
 use crate::event_modal;
 
@@ -296,21 +296,28 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
         // 'P' (shift+p) = clear entity (choose delete or resend)
         KeyCode::Char('P') => {
             if !block_if_bg_running(app, BG_BUSY_MSG) {
-                if let Some((path, entity_type)) = app.selected_entity() {
-                    match entity_type {
-                        EntityType::Queue | EntityType::Subscription | EntityType::Topic => {
-                            let entity_path = path.to_string();
-                            let is_topic = *entity_type == EntityType::Topic;
-                            app.modal = ActiveModal::ClearOptions {
-                                entity_path: entity_path.clone(),
-                                base_entity_path: entity_path,
-                                is_topic,
-                            };
-                        }
-                        _ => {
-                            app.set_status("Select a queue, topic, or subscription to clear");
-                        }
+                // Folder nodes carry no path, so read the node directly rather
+                // than going through `selected_entity()`.
+                let scope =
+                    app.flat_nodes
+                        .get(app.tree_selected)
+                        .and_then(|node| match node.entity_type {
+                            EntityType::Queue | EntityType::Subscription => {
+                                Some(ClearScope::Entity(node.path.clone()))
+                            }
+                            EntityType::Topic => Some(ClearScope::Topic(node.path.clone())),
+                            EntityType::QueueFolder => Some(ClearScope::AllQueues),
+                            EntityType::TopicFolder => Some(ClearScope::AllTopics),
+                            _ => None,
+                        });
+                match scope {
+                    Some(scope) if app.management.is_some() => {
+                        app.modal = ActiveModal::ClearOptions { scope };
                     }
+                    Some(_) => app.set_status("Not connected"),
+                    None => app.set_status(
+                        "Select a queue, topic, subscription, or the Queues/Topics folder to clear",
+                    ),
                 }
             }
         }

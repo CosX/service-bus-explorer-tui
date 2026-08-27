@@ -2,7 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::*;
 use ratatui::Frame;
 
-use crate::app::{ActiveModal, App};
+use crate::app::{ActiveModal, App, ClearAction, ClearScope};
 
 use super::sanitize::sanitize_for_terminal;
 
@@ -116,8 +116,11 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
             );
         }
         ActiveModal::PeekCountInput => render_peek_count_input(frame, app),
-        ActiveModal::ClearOptions { entity_path, .. } => {
-            render_clear_options(frame, entity_path);
+        ActiveModal::ClearOptions { scope } => {
+            render_clear_options(frame, scope);
+        }
+        ActiveModal::ConfirmClearBatch { scope, action } => {
+            render_confirm_clear_batch(frame, scope, *action);
         }
         ActiveModal::ConfirmPurgeAllDlq => {
             render_confirm_purge_all_dlq(frame);
@@ -736,20 +739,26 @@ fn render_peek_count_input(frame: &mut Frame, app: &App) {
     set_single_line_cursor(frame, layout[2], app.input_cursor);
 }
 
-fn render_clear_options(frame: &mut Frame, entity_path: &str) {
+fn render_clear_options(frame: &mut Frame, scope: &ClearScope) {
     let area = centered_rect(58, 35, frame.area());
-    let inner = render_popup_block(frame, area, " Clear Entity ".to_string(), Color::Yellow);
-
-    let entity_display = if entity_path.len() > 40 {
-        format!("...{}", &entity_path[entity_path.len() - 37..])
+    let title = if scope.is_batch() {
+        " Clear Entities "
     } else {
-        entity_path.to_string()
+        " Clear Entity "
+    };
+    let inner = render_popup_block(frame, area, title.to_string(), Color::Yellow);
+
+    let target = scope.label();
+    let target_display = if target.len() > 40 {
+        format!("...{}", &target[target.len() - 37..])
+    } else {
+        target.to_string()
     };
 
     let lines = vec![
         Line::from(""),
         Line::from(Span::styled(
-            entity_display,
+            target_display,
             Style::default().fg(Color::White).bold(),
         )),
         Line::from(""),
@@ -781,6 +790,51 @@ fn render_clear_options(frame: &mut Frame, entity_path: &str) {
             "Esc to cancel",
             Style::default().fg(Color::DarkGray),
         )),
+    ];
+
+    render_centered_lines(frame, inner, lines);
+}
+
+/// Second confirmation for a namespace-wide clear (Queues / Topics folder).
+fn render_confirm_clear_batch(frame: &mut Frame, scope: &ClearScope, action: ClearAction) {
+    let area = centered_rect(62, 32, frame.area());
+    let (title, accent) = match action {
+        ClearAction::DeleteActive | ClearAction::DeleteDlq => (" Clear ALL Entities ", Color::Red),
+        ClearAction::ResendDlq => (" Resend ALL Dead-Letter Queues ", Color::Yellow),
+    };
+    let inner = render_popup_block(frame, area, title.to_string(), accent);
+
+    let target = match scope {
+        ClearScope::AllQueues => "every queue in the namespace",
+        ClearScope::AllTopics => "every subscription of every topic",
+        _ => scope.label(),
+    };
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            action.description(),
+            Style::default().fg(accent).bold(),
+        )),
+        Line::from(Span::styled(
+            format!("across {}.", target),
+            Style::default().fg(accent).bold(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "This action cannot be undone.",
+            Style::default().fg(Color::Yellow),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  [Y] ", Style::default().fg(accent).bold()),
+            Span::styled("Yes, run it", Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("  [N] ", Style::default().fg(Color::Green).bold()),
+            Span::styled("Cancel", Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
     ];
 
     render_centered_lines(frame, inner, lines);

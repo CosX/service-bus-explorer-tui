@@ -17,7 +17,9 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 
-use app::{ActiveModal, App, BgEvent, DetailView, DiscoveryState, FocusPanel, MessageTab};
+use app::{
+    ActiveModal, App, BgEvent, ClearScope, DetailView, DiscoveryState, FocusPanel, MessageTab,
+};
 use bulk_ops::{resend_dlq_loop, resolve_purge_paths, resolve_resend_pairs, send_path_owned};
 use client::entity_path;
 use client::models::EntityType;
@@ -793,13 +795,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
             || app.status_message == "Clearing (delete DLQ)...";
         if is_clear_delete && app.data_plane.is_some() && !app.bg_running {
             let is_dlq = app.status_message == "Clearing (delete DLQ)...";
-            if let ActiveModal::ClearOptions {
-                ref entity_path,
-                is_topic,
-                ..
-            } = app.modal
-            {
-                let entity_path = entity_path.clone();
+            if let Some(pending) = app.pending_clear.take() {
+                let scope = pending.scope;
                 let dp = app.data_plane.clone().unwrap();
                 let tx = app.bg_tx.clone();
                 let cancel = app.new_cancel_token();
@@ -810,16 +807,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 app.set_status("Preparing purge...");
 
                 tokio::spawn(async move {
-                    let paths =
-                        match resolve_purge_paths(mgmt.as_ref(), &entity_path, is_topic, is_dlq)
-                            .await
-                        {
-                            Ok(p) => p,
-                            Err(e) => {
-                                send_failed(&tx, e);
-                                return;
-                            }
-                        };
+                    let paths = match resolve_purge_paths(mgmt.as_ref(), &scope, is_dlq).await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            send_failed(&tx, e);
+                            return;
+                        }
+                    };
 
                     let _ = tx.send(BgEvent::Progress(format!(
                         "Purging messages from {} path(s) (Esc to cancel)...",
@@ -894,32 +888,19 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
             && app.data_plane.is_some()
             && !app.bg_running
         {
-            if let ActiveModal::ClearOptions {
-                ref base_entity_path,
-                is_topic,
-                ..
-            } = app.modal
-            {
-                let entity_path = base_entity_path.clone();
+            if let Some(pending) = app.pending_clear.take() {
+                let scope = pending.scope;
                 let dp = app.data_plane.clone().unwrap();
                 let tx = app.bg_tx.clone();
                 let cancel = app.new_cancel_token();
                 let mgmt = app.management.as_ref().cloned();
-                let send_target = send_path_owned(&entity_path);
 
                 app.bg_running = true;
                 app.modal = ActiveModal::None;
                 app.set_status("Preparing DLQ resend...");
 
                 tokio::spawn(async move {
-                    let pairs = match resolve_resend_pairs(
-                        mgmt.as_ref(),
-                        &entity_path,
-                        &send_target,
-                        is_topic,
-                    )
-                    .await
-                    {
+                    let pairs = match resolve_resend_pairs(mgmt.as_ref(), &scope).await {
                         Ok(p) => p,
                         Err(e) => {
                             send_failed(&tx, e);
@@ -1496,14 +1477,18 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                 app.set_status("Purging messages...");
 
                 tokio::spawn(async move {
-                    let paths =
-                        match resolve_purge_paths(mgmt.as_ref(), &path, is_topic, was_dlq).await {
-                            Ok(p) => p,
-                            Err(e) => {
-                                send_failed(&tx, e);
-                                return;
-                            }
-                        };
+                    let scope = if is_topic {
+                        ClearScope::Topic(path)
+                    } else {
+                        ClearScope::Entity(path)
+                    };
+                    let paths = match resolve_purge_paths(mgmt.as_ref(), &scope, was_dlq).await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            send_failed(&tx, e);
+                            return;
+                        }
+                    };
 
                     let mut deleted = 0u64;
                     for delete_path in &paths {

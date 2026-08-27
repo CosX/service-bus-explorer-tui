@@ -247,7 +247,7 @@ The copied message preserves all custom properties and metadata while allowing y
 | `m`              | Toggle Azure Monitor metrics       |
 | `M` (shift)      | Cycle metrics window (1h/6h/24h/7d)|
 | `V` (shift)      | Open metrics detail overlay        |
-| `P` (shift)      | Clear entity (delete / DLQ resend) |
+| `P` (shift)      | Clear entity, or every queue/topic when on the Queues/Topics folder (delete / DLQ resend) |
 
 ### Messages panel
 
