@@ -333,13 +333,14 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
         }
         // 'f' = edit subscription SQL filter rule
         KeyCode::Char('f') => {
-            if !block_if_bg_running(app, BG_BUSY_MSG) {
-                if let Some((_, entity_type)) = app.selected_entity() {
-                    if *entity_type == EntityType::Subscription {
-                        app.set_status("Loading subscription filters...");
-                    } else {
-                        app.set_status("Select a subscription to edit its filter");
-                    }
+            if block_if_bg_running(app, BG_BUSY_MSG) {
+                return;
+            }
+            if let Some((_, entity_type)) = app.selected_entity() {
+                if *entity_type == EntityType::Subscription {
+                    app.set_status("Loading subscription filters...");
+                } else {
+                    app.set_status("Select a subscription to edit its filter");
                 }
             }
         }
@@ -657,11 +658,9 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
             }
         }
         // f = Toggle raw/formatted body
-        KeyCode::Char('f') => {
-            if app.selected_message_detail.is_some() {
-                app.body_raw_mode = !app.body_raw_mode;
-                app.detail_body_scroll = 0;
-            }
+        KeyCode::Char('f') if app.selected_message_detail.is_some() => {
+            app.body_raw_mode = !app.body_raw_mode;
+            app.detail_body_scroll = 0;
         }
         _ => {}
     }

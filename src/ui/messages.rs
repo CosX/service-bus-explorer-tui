@@ -189,7 +189,7 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect, total_count: usiz
         let spans = vec![
             Span::styled("filter: ", Style::default().fg(Color::Cyan)),
             Span::styled(
-                format!("\"{}\"", &app.message_search_query),
+                format!("\"{}\"", app.message_search_query),
                 Style::default().fg(Color::White),
             ),
             Span::styled(

@@ -76,12 +76,10 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                     app.modal = ActiveModal::None;
                 }
                 // Allow cycling the time window while the overlay is open
-                KeyCode::Char('M') => {
-                    if app.metrics_available {
-                        app.metrics_window = app.metrics_window.next();
-                        app.entity_metrics = None;
-                        app.set_status(format!("Metrics window: {}", app.metrics_window.label()));
-                    }
+                KeyCode::Char('M') if app.metrics_available => {
+                    app.metrics_window = app.metrics_window.next();
+                    app.entity_metrics = None;
+                    app.set_status(format!("Metrics window: {}", app.metrics_window.label()));
                 }
                 _ => {}
             }

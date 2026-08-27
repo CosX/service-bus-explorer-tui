@@ -42,6 +42,11 @@ jobs:
   audit:
     name: Security audit
     runs-on: ubuntu-latest
+    # audit-check reports through a check run and opens issues for advisories.
+    permissions:
+      contents: read
+      checks: write
+      issues: write
     steps:
       - uses: actions/checkout@v7
       - uses: rustsec/audit-check@v2
