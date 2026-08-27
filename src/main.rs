@@ -8,7 +8,7 @@ mod ui;
 
 use std::future::Future;
 use std::io;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -114,10 +114,58 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// How long the tree selection must stay put before the detail pane and
+/// metrics are loaded for it.
+const DETAIL_DEBOUNCE: Duration = Duration::from_millis(250);
+
+/// Debounce state for the tree selection driving the detail pane.
+#[derive(Debug, Clone, Copy)]
+enum DetailSelection {
+    /// Detail has been dispatched for this index.
+    Settled(usize),
+    /// Selection moved to this index; waiting for it to stop moving.
+    Pending { index: usize, since: Instant },
+}
+
+impl DetailSelection {
+    /// Record the currently selected index, restarting the debounce window
+    /// whenever it differs from what is settled or already pending.
+    fn observe(self, selected: usize) -> Self {
+        let current = match self {
+            DetailSelection::Settled(index) => index,
+            DetailSelection::Pending { index, .. } => index,
+        };
+        if current == selected {
+            self
+        } else {
+            DetailSelection::Pending {
+                index: selected,
+                since: Instant::now(),
+            }
+        }
+    }
+
+    /// Returns true exactly once, when a pending selection has been stable for
+    /// `DETAIL_DEBOUNCE`; transitions to `Settled` so it does not fire again.
+    fn take_due(&mut self) -> bool {
+        match *self {
+            DetailSelection::Pending { index, since } if since.elapsed() >= DETAIL_DEBOUNCE => {
+                *self = DetailSelection::Settled(index);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn is_settled_on(&self, selected: usize) -> bool {
+        matches!(*self, DetailSelection::Settled(index) if index == selected)
+    }
+}
+
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyhow::Result<()> {
     let mut app = App::new();
     let mut needs_refresh = false;
-    let mut last_selected: usize = usize::MAX;
+    let mut detail_selection = DetailSelection::Settled(usize::MAX);
 
     loop {
         // Draw
@@ -314,8 +362,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                         }
                     }
                 }
-                BgEvent::DetailLoaded(detail) => {
-                    app.detail_view = *detail;
+                BgEvent::DetailLoaded { path, view } => {
+                    // Drop responses for entities the user has already scrolled past.
+                    let current_path = app.flat_nodes.get(app.tree_selected).map(|n| &n.path);
+                    if current_path == Some(&path) {
+                        app.detail_view = *view;
+                    }
                 }
                 BgEvent::SubscriptionFilterLoaded {
                     topic_name,
@@ -493,10 +545,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
             needs_refresh = false;
         }
 
-        // Load detail when selection changes (spawned)
-        if app.tree_selected != last_selected && !app.flat_nodes.is_empty() {
-            last_selected = app.tree_selected;
-
+        // Load detail once the selection has settled (debounced, so scrolling
+        // through the tree does not fire a request per entity).
+        if !app.flat_nodes.is_empty() {
+            detail_selection = detail_selection.observe(app.tree_selected);
+        }
+        if detail_selection.take_due() {
             if let Some(mgmt) = app.management.as_ref() {
                 if let Some(node) = app.flat_nodes.get(app.tree_selected) {
                     let mgmt = mgmt.clone();
@@ -569,7 +623,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                             _ => None,
                         };
                         if let Some(d) = detail {
-                            let _ = tx.send(BgEvent::DetailLoaded(Box::new(d)));
+                            let _ = tx.send(BgEvent::DetailLoaded {
+                                path: path.clone(),
+                                view: Box::new(d),
+                            });
                         }
                     });
 
@@ -596,7 +653,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
             && app.metrics_enabled
             && app.entity_metrics.is_none()
             && !app.metrics_pending
-            && app.tree_selected == last_selected
+            && detail_selection.is_settled_on(app.tree_selected)
         {
             let fetch_target = app.flat_nodes.get(app.tree_selected).and_then(|node| {
                 if matches!(node.entity_type, EntityType::Queue | EntityType::Topic) {
@@ -1586,4 +1643,53 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DetailSelection, DETAIL_DEBOUNCE};
+    use std::time::Instant;
+
+    /// A pending selection whose debounce window has already elapsed.
+    fn expired_pending(index: usize) -> DetailSelection {
+        DetailSelection::Pending {
+            index,
+            since: Instant::now() - DETAIL_DEBOUNCE,
+        }
+    }
+
+    #[test]
+    fn settled_selection_stays_settled_while_unchanged() {
+        let mut state = DetailSelection::Settled(3).observe(3);
+        assert!(state.is_settled_on(3));
+        assert!(!state.take_due());
+    }
+
+    #[test]
+    fn moving_selection_becomes_pending() {
+        let mut state = DetailSelection::Settled(3).observe(4);
+        assert!(!state.is_settled_on(4));
+        assert!(
+            !state.take_due(),
+            "must not fire before the debounce elapses"
+        );
+    }
+
+    #[test]
+    fn scrolling_restarts_the_debounce_window() {
+        // An expired window for entity 4 is discarded when the user keeps scrolling.
+        let mut state = expired_pending(4).observe(5);
+        assert!(!state.take_due());
+    }
+
+    #[test]
+    fn settled_selection_fires_once_after_debounce() {
+        let mut state = expired_pending(4);
+        assert!(state.take_due());
+        assert!(state.is_settled_on(4));
+        assert!(
+            !state.take_due(),
+            "must not fire twice for the same selection"
+        );
+    }
 }

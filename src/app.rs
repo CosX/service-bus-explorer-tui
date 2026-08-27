@@ -37,7 +37,11 @@ pub enum BgEvent {
         tree: TreeNode,
         flat_nodes: Vec<FlatNode>,
     },
-    DetailLoaded(Box<DetailView>),
+    DetailLoaded {
+        /// Entity path the detail was loaded for; used to drop stale responses.
+        path: String,
+        view: Box<DetailView>,
+    },
     SubscriptionFilterLoaded {
         topic_name: String,
         sub_name: String,
