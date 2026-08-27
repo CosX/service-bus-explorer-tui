@@ -25,14 +25,21 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         ])
         .split(size);
 
-    // Title bar
+    // Title bar: connection on the left, crate version on the right.
     let title = if let Some(ref name) = app.connection_name {
         format!(" Service Bus Explorer — {} ", name)
     } else {
         " Service Bus Explorer — Not Connected ".to_string()
     };
-    let title_bar =
-        Paragraph::new(title).style(Style::default().bg(Color::Blue).fg(Color::White).bold());
+    let version = format!(" v{} ", env!("CARGO_PKG_VERSION"));
+    let used = title.chars().count() + version.chars().count();
+    let padding = (outer[0].width as usize).saturating_sub(used);
+    let title_bar = Paragraph::new(Line::from(vec![
+        Span::raw(title),
+        Span::raw(" ".repeat(padding)),
+        Span::raw(version),
+    ]))
+    .style(Style::default().bg(Color::Blue).fg(Color::White).bold());
     frame.render_widget(title_bar, outer[0]);
 
     // Body: [tree | detail+messages]
