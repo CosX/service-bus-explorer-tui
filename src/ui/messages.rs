@@ -203,9 +203,9 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect, total_count: usiz
     } else {
         // Default hint bar
         let hint_text = if app.message_tab == MessageTab::DeadLetter {
-            "/=Filter  R=Resend All  D=Delete All  Enter=View  e=Edit & Resend"
+            "/=Filter  R=Resend All  D=Delete All  Enter=View  e=Edit & Resend  F3=Copy Msg  F4=Copy Body"
         } else {
-            "/=Filter  D=Delete All  Enter=View  e=Edit & Resend"
+            "/=Filter  D=Delete All  Enter=View  e=Edit & Resend  F3=Copy Msg  F4=Copy Body"
         };
         let hint = Paragraph::new(hint_text).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(hint, area);
@@ -269,7 +269,7 @@ fn render_detail_readonly(frame: &mut Frame, app: &mut App, inner: Rect) {
     )
     .block(
         Block::default()
-            .title(" Properties (e = edit & resend · x = delete · f = format · Esc = close) ")
+            .title(" Properties (e = edit & resend · x = delete · f = format · F3 = copy msg · Esc = close) ")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Yellow)),
     );
@@ -284,7 +284,7 @@ fn render_detail_readonly(frame: &mut Frame, app: &mut App, inner: Rect) {
     };
     let body_inner = Block::default()
         .title(format!(
-            " Body [{}] (f=toggle · j/k scroll · Esc close) ",
+            " Body [{}] (f=toggle · j/k scroll · F4=copy body · Esc close) ",
             format_label
         ))
         .borders(Borders::ALL)

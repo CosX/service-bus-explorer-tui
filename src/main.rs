@@ -1,6 +1,7 @@
 mod app;
 mod bulk_ops;
 mod client;
+mod clipboard;
 mod config;
 mod event;
 mod event_modal;
@@ -183,6 +184,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
         if !app.running {
             break;
         }
+
+        // Clear ephemeral toast statuses (e.g. clipboard confirmation)
+        app.tick_status();
 
         // ──────── Poll background task results ────────
         while let Ok(event) = app.bg_rx.try_recv() {
