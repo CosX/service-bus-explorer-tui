@@ -1,7 +1,7 @@
 use ratatui::widgets::{ListState, TableState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use crate::client::models::*;
@@ -282,6 +282,10 @@ pub struct App {
     pub modal: ActiveModal,
     pub status_message: String,
     pub status_is_error: bool,
+    /// When set, `status_message` reverts to this base after `status_expires_at`.
+    pub status_toast_base: Option<String>,
+    /// When set, the toast suffix appended to the status expires at this instant.
+    pub status_expires_at: Option<Instant>,
 
     // Modal input buffers
     pub input_buffer: String,
@@ -427,6 +431,8 @@ impl App {
             modal: ActiveModal::None,
             status_message: String::from("Press 'c' to connect, '?' for help"),
             status_is_error: false,
+            status_toast_base: None,
+            status_expires_at: None,
             input_buffer: String::new(),
             input_cursor: 0,
             input_fields: Vec::new(),
@@ -475,11 +481,46 @@ impl App {
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status_message = msg.into();
         self.status_is_error = false;
+        self.status_toast_base = None;
+        self.status_expires_at = None;
+    }
+
+    /// Append a temporary notice to the current status; reverts after `secs` seconds.
+    pub fn set_toast(&mut self, msg: impl Into<String>, secs: u64) {
+        let toast = msg.into();
+        // Drop any previous toast so we append to the original base, not stack toasts.
+        if let Some(base) = self.status_toast_base.take() {
+            self.status_message = base;
+        }
+        let base = self.status_message.clone();
+        self.status_toast_base = Some(base.clone());
+        if base.is_empty() {
+            self.status_message = toast;
+        } else {
+            self.status_message = format!("{base} · {toast}");
+        }
+        self.status_is_error = false;
+        self.status_expires_at = Some(Instant::now() + Duration::from_secs(secs));
     }
 
     pub fn set_error(&mut self, msg: impl Into<String>) {
         self.status_message = msg.into();
         self.status_is_error = true;
+        self.status_toast_base = None;
+        self.status_expires_at = None;
+    }
+
+    /// Revert an expired toast status back to the message it was appended to.
+    pub fn tick_status(&mut self) {
+        if let Some(expires_at) = self.status_expires_at {
+            if Instant::now() >= expires_at {
+                self.status_expires_at = None;
+                if let Some(base) = self.status_toast_base.take() {
+                    self.status_message = base;
+                }
+                self.status_is_error = false;
+            }
+        }
     }
 
     /// Signal the running background task to stop.
@@ -1126,6 +1167,7 @@ pub async fn build_tree(
 mod tests {
     use super::*;
     use crate::client::models::{BrokerProperties, ReceivedMessage};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn auto_refresh_enabled_derived_from_config() {
@@ -1145,6 +1187,57 @@ mod tests {
     fn last_refresh_is_none_on_new_app() {
         let app = App::new();
         assert!(app.last_refresh.is_none());
+    }
+
+    #[test]
+    fn toast_appends_to_current_status() {
+        let mut app = App::new();
+        app.set_status("Peeked 3 messages");
+        app.set_toast("Copied message to clipboard (12 bytes)", 5);
+
+        assert_eq!(
+            app.status_message,
+            "Peeked 3 messages · Copied message to clipboard (12 bytes)"
+        );
+        assert_eq!(app.status_toast_base.as_deref(), Some("Peeked 3 messages"));
+        assert!(app.status_expires_at.is_some());
+    }
+
+    #[test]
+    fn toast_replaces_previous_toast_without_stacking() {
+        let mut app = App::new();
+        app.set_status("Ready");
+        app.set_toast("First copy", 5);
+        app.set_toast("Second copy", 5);
+
+        assert_eq!(app.status_message, "Ready · Second copy");
+        assert_eq!(app.status_toast_base.as_deref(), Some("Ready"));
+    }
+
+    #[test]
+    fn toast_expires_back_to_base_status() {
+        let mut app = App::new();
+        app.set_status("Peeked 3 messages");
+        app.set_toast("Copied body", 5);
+        app.status_expires_at = Some(Instant::now() - Duration::from_secs(1));
+
+        app.tick_status();
+
+        assert_eq!(app.status_message, "Peeked 3 messages");
+        assert!(app.status_toast_base.is_none());
+        assert!(app.status_expires_at.is_none());
+    }
+
+    #[test]
+    fn set_status_clears_active_toast() {
+        let mut app = App::new();
+        app.set_status("Old");
+        app.set_toast("Copied", 5);
+        app.set_status("Refreshing...");
+
+        assert_eq!(app.status_message, "Refreshing...");
+        assert!(app.status_toast_base.is_none());
+        assert!(app.status_expires_at.is_none());
     }
 
     #[test]

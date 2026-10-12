@@ -59,6 +59,8 @@ pub fn render_help(frame: &mut Frame) {
         Line::from("  1/2            Switch Messages/DLQ tab"),
         Line::from("  Enter          View message detail"),
         Line::from("  Esc            Close message detail"),
+        Line::from("  F3             Copy message (props + body) to clipboard"),
+        Line::from("  F4             Copy message body (JSON) to clipboard"),
         Line::from("  f              Toggle raw/formatted body (JSON/XML)"),
         Line::from(""),
         Line::from(vec![Span::styled(

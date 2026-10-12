@@ -662,7 +662,63 @@ fn handle_message_input(app: &mut App, key: KeyEvent) {
             app.body_raw_mode = !app.body_raw_mode;
             app.detail_body_scroll = 0;
         }
+        // F3 = Copy selected message (properties + body) as JSON to clipboard
+        KeyCode::F(3) => {
+            copy_selected_message(app, MessageCopyMode::Full);
+        }
+        // F4 = Copy selected message body as JSON value to clipboard
+        KeyCode::F(4) => {
+            copy_selected_message(app, MessageCopyMode::BodyOnly);
+        }
         _ => {}
+    }
+}
+
+enum MessageCopyMode {
+    Full,
+    BodyOnly,
+}
+
+fn selected_received_message(app: &App) -> Option<crate::client::models::ReceivedMessage> {
+    if let Some(msg) = app.selected_message_detail.clone() {
+        return Some(msg);
+    }
+    let real_idx = app
+        .message_filtered_indices
+        .get(app.message_selected)
+        .copied()?;
+    match app.message_tab {
+        MessageTab::Messages => app.messages.get(real_idx).cloned(),
+        MessageTab::DeadLetter => app.dlq_messages.get(real_idx).cloned(),
+    }
+}
+
+fn copy_selected_message(app: &mut App, mode: MessageCopyMode) {
+    let Some(msg) = selected_received_message(app) else {
+        app.set_toast("No message selected", 5);
+        return;
+    };
+
+    let serialized = match mode {
+        MessageCopyMode::Full => msg.to_clipboard_json(),
+        MessageCopyMode::BodyOnly => msg.to_clipboard_body(),
+    };
+
+    match serialized {
+        Ok(text) => match crate::clipboard::copy_text(&text) {
+            Ok(()) => {
+                let label = match mode {
+                    MessageCopyMode::Full => "message",
+                    MessageCopyMode::BodyOnly => "body",
+                };
+                app.set_toast(
+                    format!("Copied {label} to clipboard ({} bytes)", text.len()),
+                    5,
+                );
+            }
+            Err(e) => app.set_error(format!("Failed to copy to clipboard: {e}")),
+        },
+        Err(e) => app.set_error(format!("Failed to serialize message: {e}")),
     }
 }
 
@@ -811,5 +867,117 @@ mod tests {
         // last_refresh should NOT be set when blocked
         assert!(app.last_refresh.is_none());
         assert_eq!(app.status_message, BG_BUSY_MSG);
+    }
+
+    fn sample_message(body: &str) -> crate::client::models::ReceivedMessage {
+        crate::client::models::ReceivedMessage {
+            body: body.to_string(),
+            broker_properties: crate::client::models::BrokerProperties {
+                message_id: Some("msg-1".to_string()),
+                sequence_number: Some(7),
+                ..Default::default()
+            },
+            custom_properties: vec![("tenantid".to_string(), "2".to_string())],
+            lock_token_uri: None,
+            source_entity: None,
+        }
+    }
+
+    fn new_app_on_messages_with(msg: crate::client::models::ReceivedMessage) -> App {
+        let mut app = App::new();
+        app.focus = FocusPanel::Messages;
+        app.messages = vec![msg];
+        app.clear_message_filter();
+        app.message_selected = 0;
+        app.set_status("Peeked 1 messages");
+        app
+    }
+
+    #[test]
+    fn selected_message_from_list() {
+        let app = new_app_on_messages_with(sample_message(r#"{"a":1}"#));
+        let msg = selected_received_message(&app).expect("selected");
+        assert_eq!(msg.broker_properties.message_id.as_deref(), Some("msg-1"));
+        assert_eq!(msg.body, r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn selected_message_prefers_detail_view() {
+        let mut app = new_app_on_messages_with(sample_message("list-body"));
+        app.selected_message_detail = Some(sample_message("detail-body"));
+
+        let msg = selected_received_message(&app).expect("selected");
+        assert_eq!(msg.body, "detail-body");
+    }
+
+    #[test]
+    fn selected_message_none_when_empty() {
+        let mut app = App::new();
+        app.focus = FocusPanel::Messages;
+        assert!(selected_received_message(&app).is_none());
+    }
+
+    #[test]
+    fn f3_without_selection_sets_toast() {
+        let mut app = App::new();
+        app.focus = FocusPanel::Messages;
+        app.set_status("Ready");
+
+        handle_message_input(&mut app, press(KeyCode::F(3)));
+
+        assert!(app.status_message.contains("No message selected"));
+        assert!(app.status_message.starts_with("Ready"));
+        assert!(app.status_expires_at.is_some());
+    }
+
+    #[test]
+    fn f4_without_selection_sets_toast() {
+        let mut app = App::new();
+        app.focus = FocusPanel::Messages;
+        app.set_status("Ready");
+
+        handle_message_input(&mut app, press(KeyCode::F(4)));
+
+        assert!(app.status_message.contains("No message selected"));
+        assert!(app.status_expires_at.is_some());
+    }
+
+    #[test]
+    fn f3_with_selection_copies_full_message_payload() {
+        let mut app = new_app_on_messages_with(sample_message(r#"{"hello":"world"}"#));
+
+        handle_message_input(&mut app, press(KeyCode::F(3)));
+
+        // Clipboard may fail in headless CI; serialization + handler path still runs.
+        let ok = app.status_message.contains("Copied message to clipboard");
+        let err = app.status_is_error && app.status_message.contains("clipboard");
+        assert!(
+            ok || err,
+            "unexpected status after F3: {}",
+            app.status_message
+        );
+        if ok {
+            assert!(app.status_message.starts_with("Peeked 1 messages"));
+            assert!(app.status_expires_at.is_some());
+        }
+    }
+
+    #[test]
+    fn f4_with_selection_copies_body_payload() {
+        let mut app = new_app_on_messages_with(sample_message(r#"{"hello":"world"}"#));
+
+        handle_message_input(&mut app, press(KeyCode::F(4)));
+
+        let ok = app.status_message.contains("Copied body to clipboard");
+        let err = app.status_is_error && app.status_message.contains("clipboard");
+        assert!(
+            ok || err,
+            "unexpected status after F4: {}",
+            app.status_message
+        );
+        if ok {
+            assert!(app.status_message.starts_with("Peeked 1 messages"));
+            assert!(app.status_expires_at.is_some());
+        }
     }
 }
