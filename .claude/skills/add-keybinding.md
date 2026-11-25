@@ -139,4 +139,4 @@ In `src/ui/help.rs`, add the keybinding to the appropriate section.
 - [ ] Entity type validated (if operating on entities)
 - [ ] No collision with existing keybindings in the same scope
 - [ ] Help overlay updated in `ui/help.rs`
-- [ ] If async: sentinel + dispatch added per `/add-operation`
+- [ ] If async: `Command` + dispatch added per `/add-operation`

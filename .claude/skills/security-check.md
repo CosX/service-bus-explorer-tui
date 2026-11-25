@@ -52,7 +52,7 @@ let safe = sanitize_for_terminal(&msg.body, true);
 
 ## Concurrency and State
 
-- Race condition between `bg_running` flag and operation dispatch: the flag must be checked atomically with the sentinel set. The current architecture (single-threaded event loop) makes this safe — do not introduce multi-threaded access to `App` state.
+- Race condition between `bg_running` flag and operation dispatch: the flag must be checked when the command is dispatched (`commands::dispatch` rejects exclusive commands while `bg_running`). The current architecture (single-threaded event loop) makes this safe — do not introduce multi-threaded access to `App` state.
 - Cancel tokens: verify that cancelled operations do not leave `bg_running = true` permanently (would lock the UI)
 
 ## Checklist

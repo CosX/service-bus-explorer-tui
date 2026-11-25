@@ -10,7 +10,7 @@ Evaluate the provided code against the Rust standards enforced in this project. 
 
 - Use enums to model states — not booleans, string flags, or `Option<Option<T>>`
 - Encode invariants in types so invalid states are unrepresentable
-- Avoid stringly-typed logic (sentinel strings are acceptable at the event loop boundary only — do not introduce new ones in business logic)
+- Avoid stringly-typed logic: operations are requested with the `Command` enum, never by matching status text
 - Use `newtype` wrappers to prevent mixing semantically different values of the same type
 
 ## Ownership and Borrowing

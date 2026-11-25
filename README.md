@@ -260,7 +260,7 @@ The copied message preserves all custom properties and metadata while allowing y
 | `e`              | Edit & resend message (inline WYSIWYG)   |
 | `C` (shift)      | Copy message to different connection     |
 | `R` (shift)      | Bulk resend all DLQ → main entity        |
-| `D` (shift)      | Bulk delete all visible messages         |
+| `D` (shift)      | Delete the peeked (visible) messages     |
 
 ### Form editing (send / create / edit)
 
@@ -283,14 +283,19 @@ The copied message preserves all custom properties and metadata while allowing y
 
 ```
 src/
-├── main.rs              # Entry point, event loop, status-sentinel → async task dispatch
-├── app.rs               # App state, BgEvent enum, form builders, tree construction
+├── main.rs              # Entry point, terminal setup/panic hook, event loop
+├── commands.rs          # Command enum dispatch → spawned Azure operations
+├── bg_events.rs         # Applies background task results to app state
+├── loaders.rs           # Tree refresh, detail pane, metrics, ARM resource ID
+├── bulk_ops.rs          # Fan-out path resolution, DLQ resend, selective delete
+├── app.rs               # App state, BgEvent/Command enums, form builders, tree construction
 ├── event.rs             # Input routing: global → modal → panel handlers
 ├── config.rs            # TOML persistence (connections, settings, OS-specific paths)
 ├── client/
 │   ├── auth.rs          # SAS token gen, Azure AD token, connection string parsing
 │   ├── management.rs    # Management plane: ATOM XML CRUD + raw XML parsing helpers
-│   ├── data_plane.rs    # Data plane: send, peek-lock, receive-delete, purge, bulk ops
+│   ├── data_plane.rs    # Data plane: send, peek-lock, receive-delete, purge
+│   ├── scan.rs          # Lock-based peek / find-by-sequence algorithms (testable)
 │   ├── models.rs        # Entity descriptions, message models, TreeNode/FlatNode
 │   └── error.rs         # ServiceBusError (thiserror) with Api, Auth, Xml variants
 └── ui/
@@ -309,7 +314,8 @@ src/
 - **No Azure SDK** — the official Rust SDK for Service Bus is unmaintained. The client layer uses `reqwest` against the REST API directly with HMAC-SHA256 SAS token auth or Azure AD Bearer tokens.
 - **Synchronous event loop with async dispatch** — keyboard events are polled synchronously via `crossterm` at 100ms intervals; Service Bus API calls are spawned as `tokio` tasks that report results back through an `mpsc` channel.
 - **ATOM XML parsing** — the management plane returns Atom feeds with inconsistent schemas. Parsed with targeted string extraction (`extract_element`, `extract_element_value`) rather than full serde XML deserialization.
-- **Peek via peek-lock + abandon** — the REST API's `PeekOnly=true` has no cursor, so peek is implemented as peek-lock N messages then abandon all locks. This increments `DeliveryCount` on each peek.
+- **Peek via peek-lock + abandon** — the REST API's `PeekOnly=true` has no cursor, so peek is implemented as peek-lock N messages then abandon all locks. This increments `DeliveryCount` on each peek. On active queues and subscriptions a message already at `MaxDeliveryCount` is dead-lettered when its lock is released, so the peek stops at the first such message and reports it.
+- **Resending from a subscription goes to its topic** — Service Bus cannot send to a single subscription, so every subscription whose filter matches receives the resent copy. The resend confirmation names them.
 - **Concurrent purge** — message deletion spawns multiple parallel receive-and-delete workers (default 32) with progress reporting and cancellation support.
 
 ## License

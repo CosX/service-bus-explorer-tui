@@ -21,7 +21,7 @@ Modals are driven by the `ActiveModal` enum in `app.rs`. When `app.modal != Acti
 | 2 | `src/app.rs` | (Optional) Add `init_*_form()` and `build_*_from_form()` methods |
 | 3 | `src/event.rs` | Add input handling in `handle_modal_input()` |
 | 4 | `src/ui/modals.rs` | Add rendering logic |
-| 5 | `src/main.rs` | (If form) Add sentinel dispatch for submission |
+| 5 | `src/commands.rs` | (If form) Add a `submit_form()` arm for submission |
 
 ## Procedure
 
@@ -96,7 +96,7 @@ fn handle_modal_input(app: &mut App, key: KeyEvent) {
             }
             KeyCode::Enter => {
                 // Handle confirmation / submission
-                app.set_status("My sentinel...");
+                app.request(Command::MyOperation, "Working...");
                 // Or close directly:
                 app.modal = ActiveModal::None;
             }
@@ -106,7 +106,7 @@ fn handle_modal_input(app: &mut App, key: KeyEvent) {
         ActiveModal::MyForm => {
             handle_form_keys(app, key, |app| {
                 // This closure runs on submit (F2/Ctrl+Enter/Alt+Enter)
-                app.set_status("Submitting...");
+                app.request(Command::SubmitForm, "Submitting...");
             });
         }
         _ => {}
@@ -159,20 +159,19 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
 - Use `Color::Cyan` border for informational, `Color::Yellow` for warnings, `Color::Red` for destructive
 - For forms, use the shared `render_form()` helper if available, otherwise render fields manually
 
-### Step 5: Sentinel dispatch (if form submits async work)
+### Step 5: Command dispatch (if form submits async work)
 
-If the modal submission triggers an async operation, add the sentinel dispatch in `main.rs`. See the `/add-operation` skill for the full sentinel dispatch pattern.
-
-**Important:** When `"Submitting..."` is already used as a sentinel by other forms, you must disambiguate by checking `app.modal`:
+Form modals submit with F2 / Ctrl+Enter, which calls `app.request(Command::SubmitForm, ...)`. Add an arm for your modal to `submit_form()` in `src/commands.rs`; it chooses the handler from `app.modal`:
 
 ```rust
-if app.status_message == "Submitting..." {
-    if let ActiveModal::MyForm = &app.modal {
-        // Handle my form submission
-    }
-    // ... other form handlers ...
+match app.modal {
+    // ... existing forms ...
+    ActiveModal::MyForm => submit_my_form(app),
+    _ => {}
 }
 ```
+
+Confirmation modals that start an operation should call `app.request(Command::MyOperation, "...")` on `y`, and the dispatcher reads any details it needs from `app.modal`. See the `/add-operation` skill.
 
 ## Modal Types Reference
 
@@ -194,5 +193,4 @@ if app.status_message == "Submitting..." {
 - [ ] Rendering function added to `ui/modals.rs`
 - [ ] Modal dispatched in `render_modal()`
 - [ ] Form init/build methods added (if form modal)
-- [ ] Sentinel dispatch added in `main.rs` (if async submission)
-- [ ] Sentinel disambiguated if reusing `"Submitting..."`
+- [ ] `submit_form()` arm added in `commands.rs` (if async submission)

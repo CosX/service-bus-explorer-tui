@@ -63,7 +63,7 @@ Always explain tradeoffs when recommending alternatives.
 
 ## Project-Specific Checks
 
-- Sentinel strings in `main.rs` — new sentinels must be unique and not collide with existing ones
+- Status text must never trigger work — new operations go through `Command` + `commands::dispatch`
 - Topic fan-out — operations targeting topics must enumerate subscriptions; missing this is a correctness bug
 - Path casing — management plane uses `/Subscriptions/` (PascalCase), data plane uses `/subscriptions/` (lowercase); mixing these causes silent failures
 - `sanitize_for_terminal()` — must be called before rendering any Service Bus message content
