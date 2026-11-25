@@ -2,7 +2,10 @@ use crate::client::models::{EntityMetrics, MetricsResponse};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// Per-request timeout for Azure Resource Manager calls.
+const ARM_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Azure subscription returned from ARM API.
 #[derive(Debug, Clone, Deserialize)]
@@ -18,6 +21,8 @@ pub struct Subscription {
 #[derive(Debug, Deserialize)]
 struct SubscriptionListResponse {
     value: Vec<Subscription>,
+    #[serde(rename = "nextLink")]
+    next_link: Option<String>,
 }
 
 /// Azure Service Bus namespace resource.
@@ -41,6 +46,8 @@ pub struct NamespaceProperties {
 #[derive(Debug, Deserialize)]
 struct NamespaceListResponse {
     value: Vec<NamespaceResource>,
+    #[serde(rename = "nextLink")]
+    next_link: Option<String>,
 }
 
 /// Discovered namespace with enriched metadata.
@@ -71,8 +78,13 @@ pub struct ResourceManagerClient {
 impl ResourceManagerClient {
     /// Create a new Resource Manager client.
     pub fn new(credential: Arc<dyn azure_core::credentials::TokenCredential>) -> Self {
+        // Without a timeout a stalled ARM call leaves the UI resolving forever.
+        let http_client = reqwest::Client::builder()
+            .timeout(ARM_REQUEST_TIMEOUT)
+            .build()
+            .unwrap_or_default();
         Self {
-            http_client: reqwest::Client::new(),
+            http_client,
             credential,
         }
     }
@@ -89,35 +101,48 @@ impl ResourceManagerClient {
     }
 
     /// List all accessible Azure subscriptions.
+    ///
+    /// ARM pages these results, so every `nextLink` is followed; stopping at the
+    /// first page silently hides subscriptions in larger tenants.
     pub async fn list_subscriptions(&self) -> Result<Vec<Subscription>, String> {
         let token = self.get_token().await?;
-        let url = "https://management.azure.com/subscriptions?api-version=2020-01-01";
+        let mut url =
+            "https://management.azure.com/subscriptions?api-version=2020-01-01".to_string();
+        let mut subscriptions = Vec::new();
 
-        let response = self
-            .http_client
-            .get(url)
-            .bearer_auth(&token)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to list subscriptions: {}", e))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
+        loop {
+            let response = self
+                .http_client
+                .get(&url)
+                .bearer_auth(&token)
+                .send()
                 .await
-                .unwrap_or_else(|_| String::from("(no body)"));
-            return Err(format!("Subscription list failed ({}): {}", status, body));
+                .map_err(|e| format!("Failed to list subscriptions: {}", e))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| String::from("(no body)"));
+                return Err(format!("Subscription list failed ({}): {}", status, body));
+            }
+
+            let parsed: SubscriptionListResponse = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse subscription list: {}", e))?;
+
+            subscriptions.extend(parsed.value);
+
+            match parsed.next_link {
+                Some(next) if !next.is_empty() => url = next,
+                _ => break,
+            }
         }
 
-        let parsed: SubscriptionListResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse subscription list: {}", e))?;
-
         // Filter only active subscriptions
-        let active: Vec<Subscription> = parsed
-            .value
+        let active: Vec<Subscription> = subscriptions
             .into_iter()
             .filter(|s| s.state.to_lowercase() == "enabled")
             .collect();
@@ -125,40 +150,50 @@ impl ResourceManagerClient {
         Ok(active)
     }
 
-    /// List Service Bus namespaces in a subscription.
+    /// List Service Bus namespaces in a subscription, following ARM paging.
     pub async fn list_namespaces(
         &self,
         subscription_id: &str,
     ) -> Result<Vec<NamespaceResource>, String> {
         let token = self.get_token().await?;
-        let url = format!(
+        let mut url = format!(
             "https://management.azure.com/subscriptions/{}/providers/Microsoft.ServiceBus/namespaces?api-version=2021-11-01",
             subscription_id
         );
+        let mut namespaces = Vec::new();
 
-        let response = self
-            .http_client
-            .get(&url)
-            .bearer_auth(&token)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to list namespaces: {}", e))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .text()
+        loop {
+            let response = self
+                .http_client
+                .get(&url)
+                .bearer_auth(&token)
+                .send()
                 .await
-                .unwrap_or_else(|_| String::from("(no body)"));
-            return Err(format!("Namespace list failed ({}): {}", status, body));
+                .map_err(|e| format!("Failed to list namespaces: {}", e))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| String::from("(no body)"));
+                return Err(format!("Namespace list failed ({}): {}", status, body));
+            }
+
+            let parsed: NamespaceListResponse = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse namespace list: {}", e))?;
+
+            namespaces.extend(parsed.value);
+
+            match parsed.next_link {
+                Some(next) if !next.is_empty() => url = next,
+                _ => break,
+            }
         }
 
-        let parsed: NamespaceListResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse namespace list: {}", e))?;
-
-        Ok(parsed.value)
+        Ok(namespaces)
     }
 
     /// Discover all Service Bus namespaces across all subscriptions.
@@ -266,11 +301,15 @@ impl ResourceManagerClient {
     /// `/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.ServiceBus/namespaces/{name}`.
     pub async fn resolve_namespace_resource_id(&self, fqdn: &str) -> Result<String, String> {
         let subscriptions = self.list_subscriptions().await?;
+        let mut listing_errors = Vec::new();
 
-        for sub in subscriptions {
+        for sub in &subscriptions {
             let namespaces = match self.list_namespaces(&sub.subscription_id).await {
                 Ok(ns) => ns,
-                Err(_) => continue,
+                Err(e) => {
+                    listing_errors.push(format!("{}: {}", sub.display_name, e));
+                    continue;
+                }
             };
             for ns in namespaces {
                 let ns_fqdn = extract_fqdn_from_endpoint(&ns.properties.service_bus_endpoint);
@@ -280,9 +319,21 @@ impl ResourceManagerClient {
             }
         }
 
+        // Distinguish "not found" from "could not look" — the latter is a
+        // permissions problem on the ARM side, not a missing namespace.
+        if !listing_errors.is_empty() && listing_errors.len() == subscriptions.len() {
+            return Err(format!(
+                "could not list namespaces in any of {} subscription(s): {}",
+                subscriptions.len(),
+                listing_errors.join("; ")
+            ));
+        }
+
         Err(format!(
-            "Could not resolve ARM resource ID for namespace '{}'",
-            fqdn
+            "'{}' not found in {} accessible subscription(s); Azure Monitor needs \
+             Microsoft.ServiceBus/namespaces/read on the namespace",
+            fqdn,
+            subscriptions.len()
         ))
     }
 

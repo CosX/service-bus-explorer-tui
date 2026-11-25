@@ -19,6 +19,7 @@ use ratatui::prelude::*;
 
 use app::{
     ActiveModal, App, BgEvent, ClearScope, DetailView, DiscoveryState, FocusPanel, MessageTab,
+    MetricsAvailability,
 };
 use bulk_ops::{resend_dlq_loop, resolve_purge_paths, resolve_resend_pairs, send_path_owned};
 use client::entity_path;
@@ -162,6 +163,52 @@ impl DetailSelection {
     fn is_settled_on(&self, selected: usize) -> bool {
         matches!(*self, DetailSelection::Settled(index) if index == selected)
     }
+}
+
+/// Overall budget for resolving the ARM resource ID, token acquisition included.
+const RESOURCE_ID_RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Resolve the namespace's ARM resource ID, which Azure Monitor metrics need.
+///
+/// Only Azure AD connections can reach ARM; SAS connections stay `Unsupported`.
+fn spawn_resource_id_resolve(app: &mut App, user_requested: bool) {
+    let Some(credential) = app
+        .connection_config
+        .as_ref()
+        .and_then(|cfg| cfg.azure_ad_credential())
+    else {
+        app.metrics = MetricsAvailability::Unsupported;
+        return;
+    };
+
+    let Some(cfg) = app.connection_config.as_ref() else {
+        return;
+    };
+    let fqdn = cfg.namespace.clone();
+    let tx = app.bg_tx.clone();
+    let rm = client::resource_manager::ResourceManagerClient::new(credential);
+
+    app.metrics = MetricsAvailability::Resolving { user_requested };
+    tokio::spawn(async move {
+        // The HTTP client has its own per-request timeout; this also bounds
+        // token acquisition, which can otherwise block indefinitely.
+        let resolved = tokio::time::timeout(
+            RESOURCE_ID_RESOLVE_TIMEOUT,
+            rm.resolve_namespace_resource_id(&fqdn),
+        )
+        .await;
+
+        let event = match resolved {
+            Ok(Ok(id)) => BgEvent::NamespaceResourceIdResolved(id),
+            Ok(Err(e)) => BgEvent::NamespaceResourceIdFailed(e),
+            Err(_) => BgEvent::NamespaceResourceIdFailed(format!(
+                "timed out after {}s resolving '{}'",
+                RESOURCE_ID_RESOLVE_TIMEOUT.as_secs(),
+                fqdn
+            )),
+        };
+        let _ = tx.send(event);
+    });
 }
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyhow::Result<()> {
@@ -340,28 +387,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.last_refresh = Some(Instant::now());
                     app.set_status(format!("Loaded {} queues, {} topics", q_count, t_count));
 
-                    // Resolve ARM resource ID for Azure Monitor metrics (once per connection)
-                    if app.namespace_resource_id.is_none() {
-                        if let Some(ref cfg) = app.connection_config {
-                            if let Some(credential) = cfg.azure_ad_credential() {
-                                let fqdn = cfg.namespace.clone();
-                                let tx = app.bg_tx.clone();
-                                let rm = client::resource_manager::ResourceManagerClient::new(
-                                    credential,
-                                );
-                                tokio::spawn(async move {
-                                    match rm.resolve_namespace_resource_id(&fqdn).await {
-                                        Ok(id) => {
-                                            let _ =
-                                                tx.send(BgEvent::NamespaceResourceIdResolved(id));
-                                        }
-                                        Err(e) => {
-                                            let _ = tx.send(BgEvent::NamespaceResourceIdFailed(e));
-                                        }
-                                    }
-                                });
-                            }
-                        }
+                    // Resolve ARM resource ID for Azure Monitor metrics (once per
+                    // connection; a previous failure is only retried on demand).
+                    if app.namespace_resource_id.is_none() && !app.metrics.resolution_attempted() {
+                        spawn_resource_id_resolve(&mut app, false);
                     }
                 }
                 BgEvent::DetailLoaded { path, view } => {
@@ -466,11 +495,36 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
                     app.bg_running = false;
                 }
                 BgEvent::NamespaceResourceIdResolved(id) => {
+                    let announce = matches!(
+                        app.metrics,
+                        MetricsAvailability::Resolving {
+                            user_requested: true
+                        }
+                    );
                     app.namespace_resource_id = Some(id);
-                    app.metrics_available = true;
+                    app.metrics = MetricsAvailability::Available;
+                    app.entity_metrics = None;
+                    if announce {
+                        app.set_status(format!(
+                            "Metrics available ({})",
+                            app.metrics_window.label()
+                        ));
+                    }
                 }
-                BgEvent::NamespaceResourceIdFailed(_) => {
-                    app.metrics_available = false;
+                BgEvent::NamespaceResourceIdFailed(err) => {
+                    // Keep the reason: the status bar reported "requires Azure AD"
+                    // for every failure, including permission and lookup errors.
+                    let announce = matches!(
+                        app.metrics,
+                        MetricsAvailability::Resolving {
+                            user_requested: true
+                        }
+                    );
+                    app.metrics = MetricsAvailability::Failed(err);
+                    if announce {
+                        let reason = app.metrics.unavailable_reason();
+                        app.set_error(reason);
+                    }
                 }
                 BgEvent::MetricsLoaded(metrics) => {
                     app.metrics_pending = false;
@@ -634,7 +688,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
 
                     // Fetch Azure Monitor metrics for queues and topics
                     let metrics_entity_name = node.label.clone();
-                    if app.metrics_available && app.metrics_enabled {
+                    if app.metrics.is_available() && app.metrics_enabled {
                         match entity_type_for_metrics {
                             EntityType::Queue | EntityType::Topic => {
                                 spawn_metrics_fetch(&mut app, &metrics_entity_name);
@@ -651,7 +705,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
         }
 
         // Re-fetch metrics when cleared (e.g., window changed or toggled back on)
-        if app.metrics_available
+        if app.metrics.is_available()
             && app.metrics_enabled
             && app.entity_metrics.is_none()
             && !app.metrics_pending
@@ -667,6 +721,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> anyho
             if let Some(entity_name) = fetch_target {
                 spawn_metrics_fetch(&mut app, &entity_name);
             }
+        }
+
+        // Retry ARM resource ID resolution (m pressed after a failure).
+        // Driven by the metrics state, not the status text: a status sentinel
+        // would re-fire on every failure and spin.
+        if matches!(app.metrics, MetricsAvailability::RetryRequested) {
+            spawn_resource_id_resolve(&mut app, true);
         }
 
         // Namespace discovery (spawned)

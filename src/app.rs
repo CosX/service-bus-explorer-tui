@@ -341,12 +341,59 @@ pub struct App {
     // Azure Monitor metrics
     pub namespace_resource_id: Option<String>,
     pub entity_metrics: Option<EntityMetrics>,
-    pub metrics_available: bool,
+    pub metrics: MetricsAvailability,
     pub metrics_enabled: bool,
     pub metrics_window: MetricsWindow,
     pub metrics_pending: bool,
     /// Clear operation confirmed by the user, consumed by the dispatcher.
     pub pending_clear: Option<PendingClear>,
+}
+
+/// Whether Azure Monitor metrics can be served for the current connection.
+///
+/// Metrics need the namespace's ARM resource ID, which is resolved once per
+/// connection and only works for Azure AD credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetricsAvailability {
+    /// No connection, or a SAS connection, which cannot reach ARM at all.
+    Unsupported,
+    /// The user asked to retry; the dispatcher picks this up and spawns.
+    RetryRequested,
+    /// Resource ID resolution is in flight. `user_requested` decides whether
+    /// the outcome is announced in the status bar.
+    Resolving { user_requested: bool },
+    /// Resource ID resolved; metrics can be queried.
+    Available,
+    /// Resolution failed; carries the reason so the UI can report it.
+    Failed(String),
+}
+
+impl MetricsAvailability {
+    pub fn is_available(&self) -> bool {
+        matches!(self, MetricsAvailability::Available)
+    }
+
+    /// True once resolution has been attempted, so a tree refresh does not
+    /// kick off a duplicate attempt.
+    pub fn resolution_attempted(&self) -> bool {
+        !matches!(self, MetricsAvailability::Unsupported)
+    }
+
+    /// Why metrics cannot be shown right now, for the status bar.
+    pub fn unavailable_reason(&self) -> String {
+        match self {
+            MetricsAvailability::Unsupported => {
+                "Metrics require an Azure AD connection".to_string()
+            }
+            MetricsAvailability::RetryRequested | MetricsAvailability::Resolving { .. } => {
+                "Resolving namespace resource ID for metrics...".to_string()
+            }
+            MetricsAvailability::Failed(err) => {
+                format!("Metrics unavailable: {} (press m to retry)", err)
+            }
+            MetricsAvailability::Available => String::new(),
+        }
+    }
 }
 
 /// Time window for Azure Monitor metrics queries.
@@ -464,7 +511,7 @@ impl App {
             copy_destination_entity: None,
             namespace_resource_id: None,
             entity_metrics: None,
-            metrics_available: false,
+            metrics: MetricsAvailability::Unsupported,
             metrics_enabled: true,
             metrics_window: MetricsWindow::SixHours,
             metrics_pending: false,
@@ -549,7 +596,7 @@ impl App {
         // Clear metrics state
         self.namespace_resource_id = None;
         self.entity_metrics = None;
-        self.metrics_available = false;
+        self.metrics = MetricsAvailability::Unsupported;
         self.metrics_enabled = true;
 
         // Set status
@@ -1126,6 +1173,46 @@ pub async fn build_tree(
 mod tests {
     use super::*;
     use crate::client::models::{BrokerProperties, ReceivedMessage};
+
+    #[test]
+    fn failed_metrics_resolution_reports_the_real_reason() {
+        let state = MetricsAvailability::Failed("Namespace list failed (403): denied".to_string());
+        assert!(!state.is_available());
+        let reason = state.unavailable_reason();
+        // The old message blamed the auth mode for every failure.
+        assert!(!reason.contains("require an Azure AD connection"));
+        assert!(reason.contains("403"));
+    }
+
+    #[test]
+    fn sas_connections_are_told_metrics_need_azure_ad() {
+        assert!(MetricsAvailability::Unsupported
+            .unavailable_reason()
+            .contains("Azure AD"));
+    }
+
+    #[test]
+    fn only_the_available_state_serves_metrics() {
+        assert!(MetricsAvailability::Available.is_available());
+        assert!(!MetricsAvailability::Resolving {
+            user_requested: true
+        }
+        .is_available());
+        assert!(!MetricsAvailability::Unsupported.is_available());
+    }
+
+    #[test]
+    fn only_a_fresh_connection_triggers_automatic_resolution() {
+        // A refresh must not re-attempt resolution that already ran.
+        assert!(!MetricsAvailability::Unsupported.resolution_attempted());
+        assert!(MetricsAvailability::RetryRequested.resolution_attempted());
+        assert!(MetricsAvailability::Resolving {
+            user_requested: false
+        }
+        .resolution_attempted());
+        assert!(MetricsAvailability::Failed("boom".to_string()).resolution_attempted());
+        assert!(MetricsAvailability::Available.resolution_attempted());
+    }
 
     #[test]
     fn auto_refresh_enabled_derived_from_config() {
