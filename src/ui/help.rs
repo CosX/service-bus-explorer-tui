@@ -66,7 +66,7 @@ pub fn render_help(frame: &mut Frame) {
             Style::default().fg(Color::Cyan).bold(),
         )]),
         Line::from("  R (shift)      Resend peeked DLQ → main entity"),
-        Line::from("  D (shift)      Bulk delete messages"),
+        Line::from("  D (shift)      Delete the peeked messages"),
         Line::from(Span::styled(
             "                 (on topics: fan-out across all subs)",
             Style::default().fg(Color::DarkGray),

@@ -4,7 +4,7 @@ use ratatui::Frame;
 
 use crate::app::{App, FocusPanel, MessageTab};
 
-use super::sanitize::sanitize_for_terminal;
+use super::sanitize::{floor_char_boundary, sanitize_for_terminal, value_with_cursor};
 
 pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_focused = app.focus == FocusPanel::Messages;
@@ -172,7 +172,9 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect, total_count: usiz
     if app.message_search_active {
         // Active search input bar
         let cursor_char = "▏";
-        let (before, after) = app.message_search_query.split_at(app.message_search_cursor);
+        let search_cursor =
+            floor_char_boundary(&app.message_search_query, app.message_search_cursor);
+        let (before, after) = app.message_search_query.split_at(search_cursor);
         let count_info = format!(" ({}/{})", filtered_count, total_count);
 
         let spans = vec![
@@ -421,11 +423,9 @@ fn render_detail_edit(frame: &mut Frame, app: &mut App, inner: Rect) {
             Style::default().fg(Color::Gray)
         };
         let display_val = if is_active {
-            let cursor = app.form_cursor.min(value.len());
-            let (before, after) = value.split_at(cursor);
-            format!("{}▏{}", before, after)
+            value_with_cursor(value, app.form_cursor)
         } else {
-            value.clone()
+            sanitize_for_terminal(value, false)
         };
         frame.render_widget(
             Paragraph::new(display_val).style(val_style),
@@ -453,7 +453,7 @@ fn render_detail_edit(frame: &mut Frame, app: &mut App, inner: Rect) {
 
     if let Some((_, ref body_val)) = app.input_fields.first() {
         let display_body = if body_is_active {
-            let cursor = app.form_cursor.min(body_val.len());
+            let cursor = floor_char_boundary(body_val, app.form_cursor);
             let (before, after) = body_val.split_at(cursor);
             san_ml(&format!("{}▏{}", before, after))
         } else {
@@ -465,7 +465,7 @@ fn render_detail_edit(frame: &mut Frame, app: &mut App, inner: Rect) {
 
         // Auto-scroll to keep cursor visible
         if body_is_active {
-            let cursor_pos = app.form_cursor.min(body_val.len());
+            let cursor_pos = floor_char_boundary(body_val, app.form_cursor);
             let cursor_line = body_val[..cursor_pos].matches('\n').count() as u16;
             let visible = body_inner.height.saturating_sub(1);
             if cursor_line < app.body_scroll {

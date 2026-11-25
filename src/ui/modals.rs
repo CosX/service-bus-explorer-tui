@@ -4,7 +4,7 @@ use ratatui::Frame;
 
 use crate::app::{ActiveModal, App, ClearAction, ClearScope};
 
-use super::sanitize::sanitize_for_terminal;
+use super::sanitize::{floor_char_boundary, sanitize_for_terminal, value_with_cursor};
 
 fn mask_secret_ascii_keep_suffix(input: &str, suffix_chars: usize) -> String {
     if input.is_empty() {
@@ -70,15 +70,24 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
         ),
         ActiveModal::ConfirmDelete(path) => render_confirm_delete(frame, path),
         ActiveModal::ConfirmBulkResend {
-            entity_path, count, ..
+            entity_path,
+            count,
+            is_topic,
         } => {
+            let target = if *is_topic {
+                entity_path.as_str()
+            } else {
+                crate::client::entity_path::send_target(entity_path)
+            };
+            let warning = app.resend_fan_out_warning(entity_path, *is_topic);
             render_confirm_bulk(
                 frame,
                 "Resend Peeked DLQ Messages",
                 &format!(
-                    "Resend {} peeked dead-letter messages back to '{}'?\nOriginals will be removed from DLQ.",
-                    count, entity_path
+                    "Resend {} peeked dead-letter messages to '{}'?\nEach original is removed from the DLQ once its copy is sent.",
+                    count, target
                 ),
+                warning.as_deref(),
                 Color::Yellow,
             );
         }
@@ -88,14 +97,18 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
             is_dlq,
             ..
         } => {
-            let target = if *is_dlq { "DLQ" } else { "main queue" };
+            let target = if *is_dlq { "DLQ" } else { "active messages" };
+            let warning = (!*is_dlq).then_some(
+                "Finding them locks the messages ahead of them, which uses up one delivery attempt each.",
+            );
             render_confirm_bulk(
                 frame,
-                "Bulk Delete Messages",
+                "Delete Peeked Messages",
                 &format!(
-                    "Destructively delete up to {} messages from {} of '{}'?\nThis cannot be undone.",
+                    "Delete the {} peeked messages from the {} of '{}'?\nOther messages are left in place. This cannot be undone.",
                     count, target, entity_path
                 ),
+                warning,
                 Color::Red,
             );
         }
@@ -112,12 +125,18 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
                     "Delete message seq #{} from {} of '{}'?\nThis cannot be undone.",
                     sequence_number, target, entity_path
                 ),
+                None,
                 Color::Red,
             );
         }
         ActiveModal::PeekCountInput => render_peek_count_input(frame, app),
         ActiveModal::ClearOptions { scope } => {
-            render_clear_options(frame, scope);
+            let warning = match scope {
+                ClearScope::Entity(path) => app.resend_fan_out_warning(path, false),
+                ClearScope::Topic(topic) => app.resend_fan_out_warning(topic, true),
+                ClearScope::AllQueues | ClearScope::AllTopics => None,
+            };
+            render_clear_options(frame, scope, warning.as_deref());
         }
         ActiveModal::ConfirmClearBatch { scope, action } => {
             render_confirm_clear_batch(frame, scope, *action);
@@ -225,7 +244,9 @@ fn render_shortcut_hints(frame: &mut Frame, area: Rect, shortcuts: &[(&str, &str
 }
 
 fn render_centered_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'_>>) {
-    let text = Paragraph::new(lines).alignment(Alignment::Center);
+    let text = Paragraph::new(lines)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
     frame.render_widget(text, area);
 }
 
@@ -480,7 +501,7 @@ fn render_form_with_body(
 
     if let Some((_, ref body_val)) = app.input_fields.first() {
         let display_body = if body_is_active {
-            let cursor = app.form_cursor.min(body_val.len());
+            let cursor = floor_char_boundary(body_val, app.form_cursor);
             let (before, after) = body_val.split_at(cursor);
             san_ml(&format!("{}▏{}", before, after))
         } else if body_val.is_empty() {
@@ -493,7 +514,7 @@ fn render_form_with_body(
             .wrap(Wrap { trim: false });
 
         if body_is_active {
-            let cursor_pos = app.form_cursor.min(body_val.len());
+            let cursor_pos = floor_char_boundary(body_val, app.form_cursor);
             let cursor_line = body_val[..cursor_pos].matches('\n').count() as u16;
             let visible = body_inner.height.saturating_sub(1);
             if cursor_line < app.body_scroll {
@@ -545,11 +566,9 @@ fn render_form_with_body(
             Style::default().fg(Color::Gray)
         };
         let display_val = if is_active {
-            let cursor = app.form_cursor.min(value.len());
-            let (before, after) = value.split_at(cursor);
-            format!("{}▏{}", before, after)
+            value_with_cursor(value, app.form_cursor)
         } else {
-            value.clone()
+            sanitize_for_terminal(value, false)
         };
         frame.render_widget(
             Paragraph::new(display_val).style(val_style),
@@ -622,11 +641,9 @@ fn render_form_flat(frame: &mut Frame, app: &App, title: &str, hint: &str) {
         };
 
         let display_val = if is_active {
-            let cursor = app.form_cursor.min(value.len());
-            let (before, after) = value.split_at(cursor);
-            format!("{}▏{}", before, after)
+            value_with_cursor(value, app.form_cursor)
         } else {
-            value.clone()
+            sanitize_for_terminal(value, false)
         };
 
         let value_widget = Paragraph::new(display_val).style(value_style);
@@ -683,15 +700,29 @@ fn truncate(s: &str, max_len: usize) -> String {
     }
 }
 
-fn render_confirm_bulk(frame: &mut Frame, title: &str, message: &str, color: Color) {
-    let area = centered_rect(55, 25, frame.area());
+fn render_confirm_bulk(
+    frame: &mut Frame,
+    title: &str,
+    message: &str,
+    warning: Option<&str>,
+    color: Color,
+) {
+    let height = if warning.is_some() { 40 } else { 25 };
+    let area = centered_rect(60, height, frame.area());
     let inner = render_popup_block(frame, area, format!(" {} ", title), color);
 
     let mut lines = vec![Line::from("")];
     for line in message.lines() {
         lines.push(Line::from(Span::styled(
-            line.to_string(),
+            sanitize_for_terminal(line, false),
             Style::default().fg(color).bold(),
+        )));
+    }
+    if let Some(warning) = warning {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!("⚠ {}", sanitize_for_terminal(warning, false)),
+            Style::default().fg(Color::Red).bold(),
         )));
     }
     lines.push(Line::from(""));
@@ -704,7 +735,7 @@ fn render_confirm_bulk(frame: &mut Frame, title: &str, message: &str, color: Col
 }
 
 fn render_peek_count_input(frame: &mut Frame, app: &App) {
-    let area = centered_rect(45, 20, frame.area());
+    let area = centered_rect(55, 30, frame.area());
     let inner = render_popup_block(frame, area, " Peek Messages ".to_string(), Color::Cyan);
 
     let layout = Layout::default()
@@ -736,11 +767,23 @@ fn render_peek_count_input(frame: &mut Frame, app: &App) {
         Paragraph::new("Enter to peek · Esc to cancel").style(Style::default().fg(Color::DarkGray));
     frame.render_widget(hint, layout[3]);
 
+    // Peeking active messages costs each one a delivery attempt.
+    if !app.peek_dlq {
+        let warning = Paragraph::new(
+            "⚠ Peek locks each message and uses up one delivery attempt. A message already at \
+             MaxDeliveryCount is dead-lettered by the peek, which then stops.",
+        )
+        .style(Style::default().fg(Color::Yellow))
+        .wrap(Wrap { trim: true });
+        frame.render_widget(warning, layout[4]);
+    }
+
     set_single_line_cursor(frame, layout[2], app.input_cursor);
 }
 
-fn render_clear_options(frame: &mut Frame, scope: &ClearScope) {
-    let area = centered_rect(58, 35, frame.area());
+fn render_clear_options(frame: &mut Frame, scope: &ClearScope, resend_warning: Option<&str>) {
+    let height = if resend_warning.is_some() { 48 } else { 35 };
+    let area = centered_rect(58, height, frame.area());
     let title = if scope.is_batch() {
         " Clear Entities "
     } else {
@@ -785,12 +828,19 @@ fn render_clear_options(frame: &mut Frame, scope: &ClearScope) {
                 Style::default().fg(Color::White),
             ),
         ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Esc to cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
     ];
+    let mut lines = lines;
+    if let Some(warning) = resend_warning {
+        lines.push(Line::from(Span::styled(
+            format!("⚠ [R] {}", sanitize_for_terminal(warning, false)),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Esc to cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
 
     render_centered_lines(frame, inner, lines);
 }
@@ -822,7 +872,12 @@ fn render_confirm_clear_batch(frame: &mut Frame, scope: &ClearScope, action: Cle
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "This action cannot be undone.",
+            if action == ClearAction::ResendDlq && *scope == ClearScope::AllTopics {
+                "Each message is resent to its topic and reaches EVERY matching subscription, \
+                 not only the one it was dead-lettered from. This cannot be undone."
+            } else {
+                "This action cannot be undone."
+            },
             Style::default().fg(Color::Yellow),
         )),
         Line::from(""),
