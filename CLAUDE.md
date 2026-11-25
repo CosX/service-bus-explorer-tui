@@ -82,7 +82,7 @@ Forms use `input_fields: Vec<(String, String)>` with index-based field navigatio
 
 ### Keybindings (actual, not README)
 **Tree panel:** `j/k` nav, `h/l` collapse/expand, `g/G` jump, `r/F5` refresh, `s` send, `p` peek (prompts count), `d` peek DLQ, `n` create entity, `x` delete entity, `P` clear options (on a Queues/Topics folder node it batches across every queue/topic, with a second confirm)
-**Messages panel:** `j/k` nav, `Enter` view detail, `Esc` close detail, `1/2` switch tabs, `e` inline edit & resend, `R` bulk resend DLQ, `D` bulk delete
+**Messages panel:** `j/k` nav, `Enter` view detail, `Esc` close detail, `1/2` switch tabs, `F3` copy message (props + body) as JSON, `F4` copy body as JSON, `e` inline edit & resend, `R` bulk resend DLQ, `D` bulk delete
 **Metrics:** `m` toggle metrics on/off, `M` cycle time window (1h/6h/24h/7d), `V` open metrics detail overlay (braille line charts for all 5 metrics)
 **Note:** `x` deletes entities (not `d`); `d` peeks DLQ from tree
 

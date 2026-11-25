@@ -170,6 +170,48 @@ impl ReceivedMessage {
             ..Default::default()
         }
     }
+
+    /// Parse `body` as JSON when possible; otherwise wrap it as a JSON string.
+    fn body_as_json_value(&self) -> serde_json::Value {
+        match serde_json::from_str::<serde_json::Value>(&self.body) {
+            Ok(value) => value,
+            Err(_) => serde_json::Value::String(self.body.clone()),
+        }
+    }
+
+    /// Serialize broker properties, custom properties, and body as pretty JSON
+    /// for clipboard export. Omits internal fields (lock token URI, source entity)
+    /// and null broker properties. When `body` is valid JSON, it is embedded as a
+    /// structured value; otherwise it remains a string.
+    pub fn to_clipboard_json(&self) -> Result<String, serde_json::Error> {
+        let mut broker = serde_json::to_value(&self.broker_properties)?;
+        if let serde_json::Value::Object(ref mut map) = broker {
+            map.retain(|_, v| !v.is_null());
+        }
+
+        let custom: serde_json::Map<String, serde_json::Value> = self
+            .custom_properties
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect();
+
+        let export = serde_json::json!({
+            "broker_properties": broker,
+            "custom_properties": custom,
+            "body": self.body_as_json_value(),
+        });
+        serde_json::to_string_pretty(&export)
+    }
+
+    /// Serialize only the message body for clipboard export.
+    /// Valid JSON bodies are pretty-printed as structured values; otherwise the
+    /// raw body text is returned unchanged.
+    pub fn to_clipboard_body(&self) -> Result<String, serde_json::Error> {
+        match serde_json::from_str::<serde_json::Value>(&self.body) {
+            Ok(value) => serde_json::to_string_pretty(&value),
+            Err(_) => Ok(self.body.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -386,4 +428,125 @@ pub struct EntityMetrics {
     pub scheduled_messages: Vec<u64>,
     pub entity_name: String,
     pub fetched_at: Instant,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_json_includes_props_and_body() {
+        let msg = ReceivedMessage {
+            body: r#"{"hello":"world"}"#.to_string(),
+            broker_properties: BrokerProperties {
+                message_id: Some("msg-1".to_string()),
+                sequence_number: Some(42),
+                delivery_count: Some(1),
+                ..Default::default()
+            },
+            custom_properties: vec![("foo".to_string(), "bar".to_string())],
+            lock_token_uri: Some("https://example/lock".to_string()),
+            source_entity: Some("my-queue".to_string()),
+        };
+
+        let json = msg.to_clipboard_json().expect("serialize");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+
+        // JSON body is embedded as an object, not an escaped string
+        assert_eq!(value["body"]["hello"], "world");
+        assert!(value["body"].is_object());
+        assert_eq!(value["broker_properties"]["MessageId"], "msg-1");
+        assert_eq!(value["broker_properties"]["SequenceNumber"], 42);
+        assert_eq!(value["custom_properties"]["foo"], "bar");
+        // Internal fields must not leak into the clipboard payload
+        assert!(value.get("lock_token_uri").is_none());
+        assert!(value.get("source_entity").is_none());
+        // Null broker props are stripped
+        assert!(value["broker_properties"].get("CorrelationId").is_none());
+    }
+
+    #[test]
+    fn clipboard_json_keeps_non_json_body_as_string() {
+        let msg = ReceivedMessage {
+            body: "plain text body".to_string(),
+            broker_properties: BrokerProperties::default(),
+            custom_properties: Vec::new(),
+            lock_token_uri: None,
+            source_entity: None,
+        };
+
+        let json = msg.to_clipboard_json().expect("serialize");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert_eq!(value["body"], "plain text body");
+        assert!(value["body"].is_string());
+    }
+
+    #[test]
+    fn clipboard_body_pretty_prints_json() {
+        let msg = ReceivedMessage {
+            body: r#"{"hello":"world"}"#.to_string(),
+            broker_properties: BrokerProperties::default(),
+            custom_properties: Vec::new(),
+            lock_token_uri: None,
+            source_entity: None,
+        };
+
+        let text = msg.to_clipboard_body().expect("serialize");
+        let value: serde_json::Value = serde_json::from_str(&text).expect("parse");
+        assert_eq!(value["hello"], "world");
+        assert!(text.contains('\n'), "expected pretty-printed JSON");
+    }
+
+    #[test]
+    fn clipboard_body_returns_raw_non_json() {
+        let msg = ReceivedMessage {
+            body: "not json".to_string(),
+            broker_properties: BrokerProperties::default(),
+            custom_properties: Vec::new(),
+            lock_token_uri: None,
+            source_entity: None,
+        };
+
+        assert_eq!(msg.to_clipboard_body().expect("serialize"), "not json");
+    }
+
+    #[test]
+    fn clipboard_json_embeds_array_body() {
+        let msg = ReceivedMessage {
+            body: r#"[1,{"x":true}]"#.to_string(),
+            broker_properties: BrokerProperties::default(),
+            custom_properties: Vec::new(),
+            lock_token_uri: None,
+            source_entity: None,
+        };
+
+        let json = msg.to_clipboard_json().expect("serialize");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+        assert!(value["body"].is_array());
+        assert_eq!(value["body"][0], 1);
+        assert_eq!(value["body"][1]["x"], true);
+    }
+
+    #[test]
+    fn clipboard_full_and_body_agree_on_parsed_body() {
+        let msg = ReceivedMessage {
+            body: r#"{"entity":{"id":"1"},"tenantId":"2"}"#.to_string(),
+            broker_properties: BrokerProperties {
+                correlation_id: Some("corr".to_string()),
+                ..Default::default()
+            },
+            custom_properties: vec![("messagetype".to_string(), "OrderCreated".to_string())],
+            lock_token_uri: None,
+            source_entity: None,
+        };
+
+        let full: serde_json::Value =
+            serde_json::from_str(&msg.to_clipboard_json().expect("full")).expect("parse full");
+        let body_only: serde_json::Value =
+            serde_json::from_str(&msg.to_clipboard_body().expect("body")).expect("parse body");
+
+        assert_eq!(full["body"], body_only);
+        assert_eq!(full["broker_properties"]["CorrelationId"], "corr");
+        assert_eq!(full["custom_properties"]["messagetype"], "OrderCreated");
+    }
 }

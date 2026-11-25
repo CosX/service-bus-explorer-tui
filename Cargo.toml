@@ -70,6 +70,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # UUID for message IDs
 uuid = { version = "1", features = ["v4"] }
 
+# System clipboard (Wayland data-control enabled for Ubuntu/GNOME; X11 still supported)
+arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
+
 [profile.release]
 lto = true
 strip = true

@@ -256,6 +256,8 @@ The copied message preserves all custom properties and metadata while allowing y
 | `1` / `2`       | Switch Messages / DLQ tab                 |
 | `Enter`          | View message detail                      |
 | `Esc`            | Close detail view                        |
+| `F3`             | Copy selected message (props + body) as JSON |
+| `F4`             | Copy selected message body as JSON           |
 | `x`              | Delete selected message (with confirmation) |
 | `e`              | Edit & resend message (inline WYSIWYG)   |
 | `C` (shift)      | Copy message to different connection     |
