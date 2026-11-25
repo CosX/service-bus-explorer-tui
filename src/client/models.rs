@@ -101,14 +101,39 @@ pub struct SubscriptionRuntimeInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SubscriptionRule {
     pub name: String,
+    /// SQL expression for SQL/True/False filters; empty for other kinds.
     pub sql_expression: String,
+    pub filter_kind: RuleFilterKind,
+}
+
+/// The kind of filter a subscription rule uses.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum RuleFilterKind {
+    Sql,
+    True,
+    False,
+    /// Matches on message properties; has no SQL form and cannot be edited here.
+    Correlation,
+    #[default]
+    Unknown,
+}
+
+impl RuleFilterKind {
+    /// Whether the filter can be shown and edited as a SQL expression.
+    pub fn is_sql_editable(self) -> bool {
+        matches!(
+            self,
+            RuleFilterKind::Sql | RuleFilterKind::True | RuleFilterKind::False
+        )
+    }
 }
 
 // ──────────────────────────── Message Models ────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceBusMessage {
-    pub body: String,
+    /// Raw body bytes. Kept as bytes so binary payloads survive a resend intact.
+    pub body: Vec<u8>,
     pub content_type: Option<String>,
     pub message_id: Option<String>,
     pub correlation_id: Option<String>,
@@ -119,13 +144,18 @@ pub struct ServiceBusMessage {
     pub time_to_live: Option<String>,
     pub scheduled_enqueue_time: Option<String>,
     pub partition_key: Option<String>,
+    /// User properties as `(name, header literal)`.
+    ///
+    /// The literal is sent verbatim as the header value, so it must already be
+    /// in Service Bus wire form: a JSON string (`"abc"`), number, or boolean.
+    /// Use [`property_literal_from_text`] for user-entered text.
     pub custom_properties: Vec<(String, String)>,
 }
 
 impl Default for ServiceBusMessage {
     fn default() -> Self {
         Self {
-            body: String::new(),
+            body: Vec::new(),
             content_type: Some("application/json".to_string()),
             message_id: None,
             correlation_id: None,
@@ -141,11 +171,43 @@ impl Default for ServiceBusMessage {
     }
 }
 
+/// Encode user-entered text as a string-typed user property literal.
+pub fn property_literal_from_text(text: &str) -> String {
+    // serde_json escapes quotes and control characters correctly.
+    serde_json::to_string(text).unwrap_or_else(|_| format!("\"{}\"", text.replace('"', "")))
+}
+
+/// Human-readable form of a property literal: string literals are unquoted,
+/// numbers and booleans are shown as-is.
+pub fn property_display_value(literal: &str) -> String {
+    let trimmed = literal.trim();
+    if trimmed.starts_with('"') {
+        if let Ok(serde_json::Value::String(s)) = serde_json::from_str(trimmed) {
+            return s;
+        }
+        return trimmed.trim_matches('"').to_string();
+    }
+    trimmed.to_string()
+}
+
+/// User properties the broker attaches when dead-lettering. They describe the
+/// old failure and must not travel with a resent copy.
+const DEAD_LETTER_PROPERTIES: [&str; 2] = ["DeadLetterReason", "DeadLetterErrorDescription"];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceivedMessage {
+    /// Body decoded for display and editing. Lossy if the payload is not UTF-8;
+    /// see [`ReceivedMessage::body_is_text`].
     pub body: String,
+    /// The exact body bytes received from the broker.
+    #[serde(skip)]
+    pub raw_body: Vec<u8>,
     pub broker_properties: BrokerProperties,
+    /// User properties as `(name, display value)` for rendering and search.
     pub custom_properties: Vec<(String, String)>,
+    /// User properties as `(name, header literal)`, preserving their wire type.
+    #[serde(skip)]
+    pub raw_custom_properties: Vec<(String, String)>,
     /// The lock token URI for peek-locked messages (used for complete/abandon/deadletter).
     pub lock_token_uri: Option<String>,
     /// The entity path this message was peeked from (without `/$deadletterqueue`).
@@ -156,17 +218,68 @@ pub struct ReceivedMessage {
 }
 
 impl ReceivedMessage {
-    /// Convert to a sendable message, preserving body, metadata, and custom properties.
-    /// Drops broker-assigned fields (sequence number, enqueued time, delivery count, etc.).
+    /// Build from the raw body bytes and wire-form user properties.
+    pub fn new(
+        raw_body: Vec<u8>,
+        broker_properties: BrokerProperties,
+        raw_custom_properties: Vec<(String, String)>,
+    ) -> Self {
+        let body = String::from_utf8_lossy(&raw_body).into_owned();
+        let custom_properties = raw_custom_properties
+            .iter()
+            .map(|(k, v)| (k.clone(), property_display_value(v)))
+            .collect();
+        Self {
+            body,
+            raw_body,
+            broker_properties,
+            custom_properties,
+            raw_custom_properties,
+            lock_token_uri: None,
+            source_entity: None,
+        }
+    }
+
+    /// True when the body is valid UTF-8, so editing it as text is lossless.
+    pub fn body_is_text(&self) -> bool {
+        std::str::from_utf8(&self.raw_body).is_ok()
+    }
+
+    /// Wire-form literal of a user property, if present.
+    pub fn raw_property(&self, name: &str) -> Option<&str> {
+        self.raw_custom_properties
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// Convert to a sendable message, preserving the exact body bytes, metadata
+    /// and user properties (with their original types).
+    ///
+    /// Drops broker-assigned fields (sequence number, enqueued time, delivery
+    /// count, ...) and the dead-letter reason properties.
     pub fn to_sendable(&self) -> ServiceBusMessage {
         ServiceBusMessage {
-            body: self.body.clone(),
+            body: self.raw_body.clone(),
             content_type: self.broker_properties.content_type.clone(),
             message_id: self.broker_properties.message_id.clone(),
             correlation_id: self.broker_properties.correlation_id.clone(),
             session_id: self.broker_properties.session_id.clone(),
             label: self.broker_properties.label.clone(),
-            custom_properties: self.custom_properties.clone(),
+            to: self.broker_properties.to.clone(),
+            reply_to: self.broker_properties.reply_to.clone(),
+            // PartitionKey is deliberately dropped: it must match SessionId on
+            // session entities and is meaningless on unpartitioned targets.
+            custom_properties: self
+                .raw_custom_properties
+                .iter()
+                .filter(|(k, _)| {
+                    !DEAD_LETTER_PROPERTIES
+                        .iter()
+                        .any(|dl| k.eq_ignore_ascii_case(dl))
+                })
+                .cloned()
+                .collect(),
             ..Default::default()
         }
     }
@@ -386,4 +499,59 @@ pub struct EntityMetrics {
     pub scheduled_messages: Vec<u64>,
     pub entity_name: String,
     pub fetched_at: Instant,
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::*;
+
+    fn received(props: &[(&str, &str)]) -> ReceivedMessage {
+        ReceivedMessage::new(
+            b"{}".to_vec(),
+            BrokerProperties::default(),
+            props
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn display_values_unquote_strings_but_keep_numbers() {
+        assert_eq!(property_display_value("\"abc\""), "abc");
+        assert_eq!(property_display_value("\"say \\\"hi\\\"\""), "say \"hi\"");
+        assert_eq!(property_display_value("42"), "42");
+        assert_eq!(property_display_value("true"), "true");
+    }
+
+    #[test]
+    fn user_text_becomes_an_escaped_string_literal() {
+        assert_eq!(property_literal_from_text("abc"), "\"abc\"");
+        assert_eq!(property_literal_from_text("a\"b"), "\"a\\\"b\"");
+    }
+
+    #[test]
+    fn resend_copy_keeps_property_types_and_drops_dead_letter_reasons() {
+        let msg = received(&[
+            ("count", "42"),
+            ("tenant", "\"acme\""),
+            ("DeadLetterReason", "\"MaxDeliveryCountExceeded\""),
+            ("DeadLetterErrorDescription", "\"boom\""),
+        ]);
+        let copy = msg.to_sendable();
+        assert_eq!(
+            copy.custom_properties,
+            vec![
+                ("count".to_string(), "42".to_string()),
+                ("tenant".to_string(), "\"acme\"".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn binary_bodies_are_flagged_and_copied_byte_for_byte() {
+        let msg = ReceivedMessage::new(vec![0xff, 0xfe, 0x00], BrokerProperties::default(), vec![]);
+        assert!(!msg.body_is_text());
+        assert_eq!(msg.to_sendable().body, vec![0xff, 0xfe, 0x00]);
+    }
 }

@@ -5,6 +5,7 @@ pub mod error;
 pub mod management;
 pub mod models;
 pub mod resource_manager;
+pub mod scan;
 
 pub use auth::ConnectionConfig;
 pub use data_plane::DataPlaneClient;

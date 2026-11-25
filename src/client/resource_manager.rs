@@ -1,11 +1,28 @@
+use crate::client::error::ArmError;
 use crate::client::models::{EntityMetrics, MetricsResponse};
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 /// Per-request timeout for Azure Resource Manager calls.
 const ARM_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The only host ARM bearer tokens are ever sent to.
+const ARM_HOST: &str = "management.azure.com";
+const ARM_ENDPOINT: &str = "https://management.azure.com";
+
+/// Upper bound on followed `nextLink`s, so a server bug cannot loop forever.
+const MAX_ARM_PAGES: usize = 1000;
+
+/// Concurrent per-subscription namespace listings during discovery.
+const DISCOVERY_CONCURRENCY: usize = 8;
+
+/// How often discovery checks the cancel flag while waiting on requests.
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Azure subscription returned from ARM API.
 #[derive(Debug, Clone, Deserialize)]
@@ -15,14 +32,6 @@ pub struct Subscription {
     #[serde(rename = "displayName")]
     pub display_name: String,
     pub state: String,
-}
-
-/// List wrapper for subscriptions.
-#[derive(Debug, Deserialize)]
-struct SubscriptionListResponse {
-    value: Vec<Subscription>,
-    #[serde(rename = "nextLink")]
-    next_link: Option<String>,
 }
 
 /// Azure Service Bus namespace resource.
@@ -40,14 +49,6 @@ pub struct NamespaceProperties {
     #[serde(rename = "serviceBusEndpoint")]
     pub service_bus_endpoint: String,
     pub status: String,
-}
-
-/// List wrapper for namespaces.
-#[derive(Debug, Deserialize)]
-struct NamespaceListResponse {
-    value: Vec<NamespaceResource>,
-    #[serde(rename = "nextLink")]
-    next_link: Option<String>,
 }
 
 /// Discovered namespace with enriched metadata.
@@ -75,6 +76,14 @@ pub struct ResourceManagerClient {
     credential: Arc<dyn azure_core::credentials::TokenCredential>,
 }
 
+/// Generic ARM list page (`value` + optional `nextLink`).
+#[derive(Debug, Deserialize)]
+struct Page<T> {
+    value: Vec<T>,
+    #[serde(rename = "nextLink")]
+    next_link: Option<String>,
+}
+
 impl ResourceManagerClient {
     /// Create a new Resource Manager client.
     pub fn new(credential: Arc<dyn azure_core::credentials::TokenCredential>) -> Self {
@@ -90,126 +99,111 @@ impl ResourceManagerClient {
     }
 
     /// Get an Azure Resource Manager bearer token.
-    async fn get_token(&self) -> Result<String, String> {
+    async fn get_token(&self) -> Result<String, ArmError> {
         let token = self
             .credential
             .get_token(&["https://management.azure.com/.default"], None)
             .await
-            .map_err(|e| format!("Failed to get ARM token: {}", e))?;
+            .map_err(|e| ArmError::Auth(e.to_string()))?;
 
         Ok(token.token.secret().to_string())
     }
 
-    /// List all accessible Azure subscriptions.
+    /// GET an ARM list endpoint and follow every `nextLink`.
     ///
-    /// ARM pages these results, so every `nextLink` is followed; stopping at the
-    /// first page silently hides subscriptions in larger tenants.
-    pub async fn list_subscriptions(&self) -> Result<Vec<Subscription>, String> {
+    /// ARM pages large result sets; stopping at the first page silently hides
+    /// resources in larger tenants. The bearer token is only ever sent to
+    /// `https://management.azure.com`, whatever host a `nextLink` names.
+    async fn get_all_pages<T: DeserializeOwned>(
+        &self,
+        first_url: String,
+    ) -> Result<Vec<T>, ArmError> {
         let token = self.get_token().await?;
-        let mut url =
-            "https://management.azure.com/subscriptions?api-version=2020-01-01".to_string();
-        let mut subscriptions = Vec::new();
+        let mut url = first_url;
+        let mut items = Vec::new();
 
-        loop {
+        for _ in 0..MAX_ARM_PAGES {
             let response = self
                 .http_client
                 .get(&url)
                 .bearer_auth(&token)
                 .send()
-                .await
-                .map_err(|e| format!("Failed to list subscriptions: {}", e))?;
+                .await?;
 
-            if !response.status().is_success() {
-                let status = response.status();
+            let status = response.status();
+            if !status.is_success() {
                 let body = response
                     .text()
                     .await
                     .unwrap_or_else(|_| String::from("(no body)"));
-                return Err(format!("Subscription list failed ({}): {}", status, body));
+                return Err(ArmError::Status {
+                    status: status.as_u16(),
+                    body,
+                });
             }
 
-            let parsed: SubscriptionListResponse = response
+            let page: Page<T> = response
                 .json()
                 .await
-                .map_err(|e| format!("Failed to parse subscription list: {}", e))?;
+                .map_err(|e| ArmError::Parse(e.to_string()))?;
+            items.extend(page.value);
 
-            subscriptions.extend(parsed.value);
-
-            match parsed.next_link {
-                Some(next) if !next.is_empty() => url = next,
-                _ => break,
+            match page.next_link {
+                Some(next) if !next.is_empty() => {
+                    if !is_trusted_arm_url(&next) {
+                        return Err(ArmError::UntrustedLink(next));
+                    }
+                    url = next;
+                }
+                _ => return Ok(items),
             }
         }
 
-        // Filter only active subscriptions
-        let active: Vec<Subscription> = subscriptions
-            .into_iter()
-            .filter(|s| s.state.to_lowercase() == "enabled")
-            .collect();
-
-        Ok(active)
+        Err(ArmError::TooManyPages(MAX_ARM_PAGES))
     }
 
-    /// List Service Bus namespaces in a subscription, following ARM paging.
+    /// List all accessible, enabled Azure subscriptions.
+    pub async fn list_subscriptions(&self) -> Result<Vec<Subscription>, ArmError> {
+        let subscriptions: Vec<Subscription> = self
+            .get_all_pages(format!(
+                "{}/subscriptions?api-version=2020-01-01",
+                ARM_ENDPOINT
+            ))
+            .await?;
+
+        Ok(subscriptions
+            .into_iter()
+            .filter(|s| s.state.eq_ignore_ascii_case("enabled"))
+            .collect())
+    }
+
+    /// List Service Bus namespaces in a subscription.
     pub async fn list_namespaces(
         &self,
         subscription_id: &str,
-    ) -> Result<Vec<NamespaceResource>, String> {
-        let token = self.get_token().await?;
-        let mut url = format!(
-            "https://management.azure.com/subscriptions/{}/providers/Microsoft.ServiceBus/namespaces?api-version=2021-11-01",
-            subscription_id
-        );
-        let mut namespaces = Vec::new();
-
-        loop {
-            let response = self
-                .http_client
-                .get(&url)
-                .bearer_auth(&token)
-                .send()
-                .await
-                .map_err(|e| format!("Failed to list namespaces: {}", e))?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| String::from("(no body)"));
-                return Err(format!("Namespace list failed ({}): {}", status, body));
-            }
-
-            let parsed: NamespaceListResponse = response
-                .json()
-                .await
-                .map_err(|e| format!("Failed to parse namespace list: {}", e))?;
-
-            namespaces.extend(parsed.value);
-
-            match parsed.next_link {
-                Some(next) if !next.is_empty() => url = next,
-                _ => break,
-            }
-        }
-
-        Ok(namespaces)
+    ) -> Result<Vec<NamespaceResource>, ArmError> {
+        self.get_all_pages(format!(
+            "{}/subscriptions/{}/providers/Microsoft.ServiceBus/namespaces?api-version=2021-11-01",
+            ARM_ENDPOINT, subscription_id
+        ))
+        .await
     }
 
     /// Discover all Service Bus namespaces across all subscriptions.
     /// Returns both successful discoveries and per-subscription errors.
+    ///
+    /// Subscriptions are queried with bounded concurrency so large tenants do
+    /// not trip ARM throttling, and outstanding requests are aborted on cancel.
     pub async fn discover_namespaces(&self, cancel: Arc<AtomicBool>) -> DiscoveryResult {
-        let mut all_namespaces = Vec::new();
-        let mut errors = Vec::new();
+        let empty = || DiscoveryResult {
+            namespaces: Vec::new(),
+            errors: Vec::new(),
+        };
 
         if cancel.load(Ordering::Relaxed) {
-            return DiscoveryResult {
-                namespaces: Vec::new(),
-                errors: Vec::new(),
-            };
+            return empty();
         }
 
-        // Get subscriptions
         let subscriptions = match self.list_subscriptions().await {
             Ok(subs) => subs,
             Err(e) => {
@@ -221,10 +215,7 @@ impl ResourceManagerClient {
         };
 
         if cancel.load(Ordering::Relaxed) {
-            return DiscoveryResult {
-                namespaces: Vec::new(),
-                errors: Vec::new(),
-            };
+            return empty();
         }
 
         if subscriptions.is_empty() {
@@ -234,54 +225,57 @@ impl ResourceManagerClient {
             };
         }
 
-        // Query each subscription in parallel
-        let mut handles = Vec::with_capacity(subscriptions.len());
+        let limit = Arc::new(Semaphore::new(DISCOVERY_CONCURRENCY));
+        let mut tasks = JoinSet::new();
         for sub in subscriptions {
             let client = self.clone();
-            let subscription_id = sub.subscription_id.clone();
-            let subscription_name = sub.display_name.clone();
-
-            handles.push(tokio::spawn(async move {
-                (
-                    subscription_name.clone(),
-                    subscription_id.clone(),
-                    client.list_namespaces(&subscription_id).await,
-                )
-            }));
+            let limit = Arc::clone(&limit);
+            tasks.spawn(async move {
+                // The semaphore is never closed, so acquire only fails if it
+                // were; treat that as "run anyway" rather than dropping work.
+                let _permit = limit.acquire_owned().await.ok();
+                let result = client.list_namespaces(&sub.subscription_id).await;
+                (sub.display_name, result)
+            });
         }
 
-        // Collect results
-        for handle in handles {
-            if cancel.load(Ordering::Relaxed) {
-                // Abort remaining handles
-                break;
-            }
-            match handle.await {
-                Ok((sub_name, _sub_id, Ok(namespaces))) => {
-                    for ns in namespaces {
-                        // Extract FQDN from serviceBusEndpoint (e.g., "https://mynamespace.servicebus.windows.net:443/")
-                        let fqdn = extract_fqdn_from_endpoint(&ns.properties.service_bus_endpoint);
+        let mut all_namespaces = Vec::new();
+        let mut errors = Vec::new();
 
-                        all_namespaces.push(DiscoveredNamespace {
-                            fqdn,
-                            name: ns.name,
-                            subscription_name: sub_name.clone(),
-                            resource_id: ns.id,
-                            location: ns.location,
-                            status: ns.properties.status,
-                        });
+        loop {
+            tokio::select! {
+                joined = tasks.join_next() => {
+                    let Some(joined) = joined else { break };
+                    match joined {
+                        Ok((sub_name, Ok(namespaces))) => {
+                            for ns in namespaces {
+                                let fqdn =
+                                    extract_fqdn_from_endpoint(&ns.properties.service_bus_endpoint);
+                                all_namespaces.push(DiscoveredNamespace {
+                                    fqdn,
+                                    name: ns.name,
+                                    subscription_name: sub_name.clone(),
+                                    resource_id: ns.id,
+                                    location: ns.location,
+                                    status: ns.properties.status,
+                                });
+                            }
+                        }
+                        Ok((sub_name, Err(e))) => {
+                            errors.push(format!("Subscription '{}': {}", sub_name, e));
+                        }
+                        Err(e) => errors.push(format!("Task join error: {}", e)),
                     }
                 }
-                Ok((sub_name, _sub_id, Err(e))) => {
-                    errors.push(format!("Subscription '{}': {}", sub_name, e));
-                }
-                Err(e) => {
-                    errors.push(format!("Task join error: {}", e));
+                _ = tokio::time::sleep(CANCEL_POLL_INTERVAL) => {
+                    if cancel.load(Ordering::Relaxed) {
+                        tasks.abort_all();
+                        return empty();
+                    }
                 }
             }
         }
 
-        // Sort by subscription name, then namespace name
         all_namespaces.sort_by(|a, b| {
             a.subscription_name
                 .cmp(&b.subscription_name)
@@ -299,7 +293,7 @@ impl ResourceManagerClient {
     /// Iterates subscriptions and their namespaces to find the matching FQDN.
     /// Returns the full ARM resource path, e.g.
     /// `/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.ServiceBus/namespaces/{name}`.
-    pub async fn resolve_namespace_resource_id(&self, fqdn: &str) -> Result<String, String> {
+    pub async fn resolve_namespace_resource_id(&self, fqdn: &str) -> Result<String, ArmError> {
         let subscriptions = self.list_subscriptions().await?;
         let mut listing_errors = Vec::new();
 
@@ -322,19 +316,18 @@ impl ResourceManagerClient {
         // Distinguish "not found" from "could not look" — the latter is a
         // permissions problem on the ARM side, not a missing namespace.
         if !listing_errors.is_empty() && listing_errors.len() == subscriptions.len() {
-            return Err(format!(
-                "could not list namespaces in any of {} subscription(s): {}",
-                subscriptions.len(),
-                listing_errors.join("; ")
-            ));
+            return Err(ArmError::ListingFailed {
+                count: subscriptions.len(),
+                details: listing_errors.join("; "),
+            });
         }
 
-        Err(format!(
+        Err(ArmError::NotFound(format!(
             "'{}' not found in {} accessible subscription(s); Azure Monitor needs \
              Microsoft.ServiceBus/namespaces/read on the namespace",
             fqdn,
             subscriptions.len()
-        ))
+        )))
     }
 
     /// Query Azure Monitor for entity metrics.
@@ -344,12 +337,12 @@ impl ResourceManagerClient {
         entity_name: &str,
         timespan: &str,
         interval: &str,
-    ) -> Result<EntityMetrics, String> {
+    ) -> Result<EntityMetrics, ArmError> {
         let token = self.get_token().await?;
         let filter = format!("EntityName eq '{}'", entity_name);
         let url = format!(
-            "https://management.azure.com{}/providers/microsoft.insights/metrics",
-            resource_id
+            "{}{}/providers/microsoft.insights/metrics",
+            ARM_ENDPOINT, resource_id
         );
 
         // Fetch gauge metrics (average aggregation) and throughput metrics (total aggregation)
@@ -387,40 +380,21 @@ impl ResourceManagerClient {
 
         let (gauge_resp, throughput_resp) = tokio::join!(gauge_request, throughput_request);
 
-        let gauge_resp = gauge_resp.map_err(|e| format!("Gauge metrics request failed: {}", e))?;
-        let throughput_resp =
-            throughput_resp.map_err(|e| format!("Throughput metrics request failed: {}", e))?;
+        let gauge_resp = gauge_resp?;
+        let throughput_resp = throughput_resp?;
 
-        if !gauge_resp.status().is_success() {
-            let status = gauge_resp.status();
-            let body = gauge_resp
-                .text()
-                .await
-                .unwrap_or_else(|_| String::from("(no body)"));
-            return Err(format!("Gauge metrics query failed ({}): {}", status, body));
-        }
-
-        if !throughput_resp.status().is_success() {
-            let status = throughput_resp.status();
-            let body = throughput_resp
-                .text()
-                .await
-                .unwrap_or_else(|_| String::from("(no body)"));
-            return Err(format!(
-                "Throughput metrics query failed ({}): {}",
-                status, body
-            ));
-        }
+        let gauge_resp = ensure_success(gauge_resp).await?;
+        let throughput_resp = ensure_success(throughput_resp).await?;
 
         let gauge_parsed: MetricsResponse = gauge_resp
             .json()
             .await
-            .map_err(|e| format!("Failed to parse gauge metrics: {}", e))?;
+            .map_err(|e| ArmError::Parse(format!("gauge metrics: {}", e)))?;
 
         let throughput_parsed: MetricsResponse = throughput_resp
             .json()
             .await
-            .map_err(|e| format!("Failed to parse throughput metrics: {}", e))?;
+            .map_err(|e| ArmError::Parse(format!("throughput metrics: {}", e)))?;
 
         let mut active = Vec::new();
         let mut dlq = Vec::new();
@@ -478,6 +452,29 @@ impl ResourceManagerClient {
     }
 }
 
+/// Turn a non-2xx ARM response into an [`ArmError::Status`].
+async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response, ArmError> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|_| String::from("(no body)"));
+    Err(ArmError::Status {
+        status: status.as_u16(),
+        body,
+    })
+}
+
+/// Only `https://management.azure.com/...` may receive an ARM bearer token.
+fn is_trusted_arm_url(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .map(|u| u.scheme() == "https" && u.host_str() == Some(ARM_HOST) && u.port().is_none())
+        .unwrap_or(false)
+}
+
 /// Extract FQDN from Azure Service Bus endpoint URL.
 /// Example: "https://mynamespace.servicebus.windows.net:443/" -> "mynamespace.servicebus.windows.net"
 fn extract_fqdn_from_endpoint(endpoint: &str) -> String {
@@ -512,5 +509,31 @@ mod tests {
             extract_fqdn_from_endpoint("myns.servicebus.windows.net"),
             "myns.servicebus.windows.net"
         );
+    }
+
+    #[test]
+    fn paging_links_are_only_followed_to_arm() {
+        assert!(is_trusted_arm_url(
+            "https://management.azure.com/subscriptions?api-version=2020-01-01&$skiptoken=abc"
+        ));
+        assert!(!is_trusted_arm_url(
+            "http://management.azure.com/subscriptions"
+        ));
+        assert!(!is_trusted_arm_url("https://evil.example/subscriptions"));
+        assert!(!is_trusted_arm_url(
+            "https://management.azure.com.evil.example/subscriptions"
+        ));
+        assert!(!is_trusted_arm_url("https://management.azure.com:8443/x"));
+        assert!(!is_trusted_arm_url("not a url"));
+    }
+
+    #[test]
+    fn page_without_next_link_deserializes() {
+        let page: Page<Subscription> = serde_json::from_str(
+            r#"{"value":[{"subscriptionId":"s1","displayName":"One","state":"Enabled"}]}"#,
+        )
+        .expect("valid page");
+        assert_eq!(page.value.len(), 1);
+        assert!(page.next_link.is_none());
     }
 }

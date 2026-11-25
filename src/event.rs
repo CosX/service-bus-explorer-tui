@@ -1,7 +1,9 @@
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::Duration;
 
-use crate::app::{ActiveModal, App, ClearScope, FocusPanel, MessageTab, MetricsAvailability};
+use crate::app::{
+    ActiveModal, App, ClearScope, Command, FocusPanel, MessageTab, MetricsAvailability,
+};
 use crate::client::models::EntityType;
 use crate::event_modal;
 
@@ -139,7 +141,7 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
         KeyCode::Char('r') | KeyCode::F(5) => {
             if !block_if_bg_running(app, BG_BUSY_MSG) {
                 app.last_refresh = Some(std::time::Instant::now());
-                app.set_status("Refreshing...");
+                app.request(Command::Refresh, "Refreshing...");
                 // Trigger async refresh — handled in main loop
             }
         }
@@ -165,6 +167,8 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
             MetricsAvailability::Available => {
                 app.metrics_enabled = !app.metrics_enabled;
                 app.entity_metrics = None;
+                // An explicit toggle is a request to try again now.
+                app.metrics_failure = None;
                 if app.metrics_enabled {
                     app.set_status(format!("Metrics enabled ({})", app.metrics_window.label()));
                 } else {
@@ -187,6 +191,7 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
             if app.metrics.is_available() {
                 app.metrics_window = app.metrics_window.next();
                 app.entity_metrics = None;
+                app.metrics_failure = None;
                 app.set_status(format!("Metrics window: {}", app.metrics_window.label()));
             } else {
                 let reason = app.metrics.unavailable_reason();
@@ -344,7 +349,10 @@ fn handle_tree_input(app: &mut App, key: KeyEvent) {
             }
             if let Some((_, entity_type)) = app.selected_entity() {
                 if *entity_type == EntityType::Subscription {
-                    app.set_status("Loading subscription filters...");
+                    app.request(
+                        Command::LoadSubscriptionFilter,
+                        "Loading subscription filters...",
+                    );
                 } else {
                     app.set_status("Select a subscription to edit its filter");
                 }
@@ -803,7 +811,7 @@ mod tests {
         handle_tree_input(&mut app, press(KeyCode::Char('r')));
 
         assert!(app.last_refresh.is_some());
-        assert_eq!(app.status_message, "Refreshing...");
+        assert_eq!(app.pending_command, Some(Command::Refresh));
     }
 
     #[test]

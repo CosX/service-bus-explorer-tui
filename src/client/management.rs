@@ -1,3 +1,6 @@
+use std::borrow::Cow;
+use std::time::Duration;
+
 use reqwest::Client;
 
 use super::auth::ConnectionConfig;
@@ -29,6 +32,7 @@ fn queue_description_xml(desc: &QueueDescription) -> String {
         r#"<QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">"#,
     );
     if let Some(ref v) = desc.lock_duration {
+        let v = esc(v);
         xml.push_str(&format!("<LockDuration>{}</LockDuration>", v));
     }
     if let Some(v) = desc.max_size_in_megabytes {
@@ -44,6 +48,7 @@ fn queue_description_xml(desc: &QueueDescription) -> String {
         xml.push_str(&format!("<RequiresSession>{}</RequiresSession>", v));
     }
     if let Some(ref v) = desc.default_message_time_to_live {
+        let v = esc(v);
         xml.push_str(&format!(
             "<DefaultMessageTimeToLive>{}</DefaultMessageTimeToLive>",
             v
@@ -56,6 +61,7 @@ fn queue_description_xml(desc: &QueueDescription) -> String {
         ));
     }
     if let Some(ref v) = desc.duplicate_detection_history_time_window {
+        let v = esc(v);
         xml.push_str(&format!(
             "<DuplicateDetectionHistoryTimeWindow>{}</DuplicateDetectionHistoryTimeWindow>",
             v
@@ -71,18 +77,22 @@ fn queue_description_xml(desc: &QueueDescription) -> String {
         ));
     }
     if let Some(ref v) = desc.status {
+        let v = esc(v);
         xml.push_str(&format!("<Status>{}</Status>", v));
     }
     if let Some(ref v) = desc.forward_to {
+        let v = esc(v);
         xml.push_str(&format!("<ForwardTo>{}</ForwardTo>", v));
     }
     if let Some(ref v) = desc.forward_dead_lettered_messages_to {
+        let v = esc(v);
         xml.push_str(&format!(
             "<ForwardDeadLetteredMessagesTo>{}</ForwardDeadLetteredMessagesTo>",
             v
         ));
     }
     if let Some(ref v) = desc.auto_delete_on_idle {
+        let v = esc(v);
         xml.push_str(&format!("<AutoDeleteOnIdle>{}</AutoDeleteOnIdle>", v));
     }
     if let Some(v) = desc.enable_partitioning {
@@ -100,6 +110,7 @@ fn topic_description_xml(desc: &TopicDescription) -> String {
         xml.push_str(&format!("<MaxSizeInMegabytes>{}</MaxSizeInMegabytes>", v));
     }
     if let Some(ref v) = desc.default_message_time_to_live {
+        let v = esc(v);
         xml.push_str(&format!(
             "<DefaultMessageTimeToLive>{}</DefaultMessageTimeToLive>",
             v
@@ -118,12 +129,14 @@ fn topic_description_xml(desc: &TopicDescription) -> String {
         ));
     }
     if let Some(ref v) = desc.status {
+        let v = esc(v);
         xml.push_str(&format!("<Status>{}</Status>", v));
     }
     if let Some(v) = desc.support_ordering {
         xml.push_str(&format!("<SupportOrdering>{}</SupportOrdering>", v));
     }
     if let Some(ref v) = desc.auto_delete_on_idle {
+        let v = esc(v);
         xml.push_str(&format!("<AutoDeleteOnIdle>{}</AutoDeleteOnIdle>", v));
     }
     if let Some(v) = desc.enable_partitioning {
@@ -138,12 +151,14 @@ fn subscription_description_xml(desc: &SubscriptionDescription) -> String {
         r#"<SubscriptionDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">"#,
     );
     if let Some(ref v) = desc.lock_duration {
+        let v = esc(v);
         xml.push_str(&format!("<LockDuration>{}</LockDuration>", v));
     }
     if let Some(v) = desc.requires_session {
         xml.push_str(&format!("<RequiresSession>{}</RequiresSession>", v));
     }
     if let Some(ref v) = desc.default_message_time_to_live {
+        let v = esc(v);
         xml.push_str(&format!(
             "<DefaultMessageTimeToLive>{}</DefaultMessageTimeToLive>",
             v
@@ -165,22 +180,48 @@ fn subscription_description_xml(desc: &SubscriptionDescription) -> String {
         ));
     }
     if let Some(ref v) = desc.status {
+        let v = esc(v);
         xml.push_str(&format!("<Status>{}</Status>", v));
     }
     if let Some(ref v) = desc.forward_to {
+        let v = esc(v);
         xml.push_str(&format!("<ForwardTo>{}</ForwardTo>", v));
     }
     if let Some(ref v) = desc.forward_dead_lettered_messages_to {
+        let v = esc(v);
         xml.push_str(&format!(
             "<ForwardDeadLetteredMessagesTo>{}</ForwardDeadLetteredMessagesTo>",
             v
         ));
     }
     if let Some(ref v) = desc.auto_delete_on_idle {
+        let v = esc(v);
         xml.push_str(&format!("<AutoDeleteOnIdle>{}</AutoDeleteOnIdle>", v));
     }
     xml.push_str("</SubscriptionDescription>");
     xml
+}
+
+/// Per-request timeout for management calls.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Entries per ATOM feed page. Service Bus caps feeds at 100 per request.
+const FEED_PAGE_SIZE: usize = 100;
+
+/// Upper bound on feed pages (1M entities), so a server bug cannot loop forever.
+const MAX_FEED_PAGES: usize = 10_000;
+
+/// Escape a value for use as XML element text.
+fn esc(value: &str) -> Cow<'_, str> {
+    quick_xml::escape::escape(value)
+}
+
+/// Decode XML entities in element text (`&gt;` -> `>`). Falls back to the
+/// raw text if it contains an entity quick-xml does not know.
+fn unesc(value: &str) -> String {
+    quick_xml::escape::unescape(value)
+        .map(Cow::into_owned)
+        .unwrap_or_else(|_| value.to_string())
 }
 
 fn to_cdata_safe(value: &str) -> String {
@@ -199,14 +240,45 @@ fn subscription_rule_sql_xml(sql_expression: &str) -> String {
 
 impl ManagementClient {
     pub fn new(config: ConnectionConfig) -> Self {
-        Self {
-            config,
-            http: Client::new(),
+        let http = Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .build()
+            .unwrap_or_default();
+        Self { config, http }
+    }
+
+    /// Fetch every entry of an ATOM feed, following `$skip`/`$top` paging.
+    ///
+    /// Service Bus returns at most 100 entries per request; reading only the
+    /// first page silently hides the rest of a large namespace.
+    async fn get_atom_feed(&self, path: &str) -> Result<Vec<String>> {
+        let mut entries = Vec::new();
+        for page in 0..MAX_FEED_PAGES {
+            let query = format!("$skip={}&$top={}", page * FEED_PAGE_SIZE, FEED_PAGE_SIZE);
+            let xml = self.get_atom_with_query(path, &query).await?;
+            let page_entries = extract_entries(&xml);
+            let page_len = page_entries.len();
+            entries.extend(page_entries);
+            if page_len < FEED_PAGE_SIZE {
+                return Ok(entries);
+            }
         }
+        Err(ServiceBusError::Operation(format!(
+            "feed '{}' did not end after {} pages",
+            path, MAX_FEED_PAGES
+        )))
     }
 
     async fn get_atom(&self, path: &str) -> Result<String> {
-        let url = format!("{}/{}?api-version=2017-04", self.config.endpoint, path);
+        self.get_atom_with_query(path, "").await
+    }
+
+    async fn get_atom_with_query(&self, path: &str, extra_query: &str) -> Result<String> {
+        let mut url = format!("{}/{}?api-version=2017-04", self.config.endpoint, path);
+        if !extra_query.is_empty() {
+            url.push('&');
+            url.push_str(extra_query);
+        }
         let token = self.config.namespace_token().await?;
 
         let resp = self
@@ -281,8 +353,8 @@ impl ManagementClient {
 
     /// List queues with (active_message_count, dead_letter_message_count) from the same feed.
     pub async fn list_queues_with_counts(&self) -> Result<Vec<(QueueDescription, i64, i64)>> {
-        let xml = self.get_atom("$Resources/Queues").await?;
-        parse_queue_feed_with_counts(&xml)
+        let entries = self.get_atom_feed("$Resources/Queues").await?;
+        Ok(parse_queue_feed_with_counts(entries))
     }
 
     pub async fn get_queue(&self, name: &str) -> Result<QueueDescription> {
@@ -309,8 +381,8 @@ impl ManagementClient {
     // ────────── Topics ──────────
 
     pub async fn list_topics(&self) -> Result<Vec<TopicDescription>> {
-        let xml = self.get_atom("$Resources/Topics").await?;
-        parse_topic_feed(&xml)
+        let entries = self.get_atom_feed("$Resources/Topics").await?;
+        Ok(parse_topic_feed(entries))
     }
 
     pub async fn get_topic(&self, name: &str) -> Result<TopicDescription> {
@@ -340,10 +412,10 @@ impl ManagementClient {
         &self,
         topic_name: &str,
     ) -> Result<Vec<SubscriptionDescription>> {
-        let xml = self
-            .get_atom(&format!("{}/Subscriptions", topic_name))
+        let entries = self
+            .get_atom_feed(&format!("{}/Subscriptions", topic_name))
             .await?;
-        parse_subscription_feed(topic_name, &xml)
+        Ok(parse_subscription_feed(topic_name, entries))
     }
 
     /// List subscriptions with (active_message_count, dead_letter_message_count) from the same feed.
@@ -351,10 +423,10 @@ impl ManagementClient {
         &self,
         topic_name: &str,
     ) -> Result<Vec<(SubscriptionDescription, i64, i64)>> {
-        let xml = self
-            .get_atom(&format!("{}/Subscriptions", topic_name))
+        let entries = self
+            .get_atom_feed(&format!("{}/Subscriptions", topic_name))
             .await?;
-        parse_subscription_feed_with_counts(topic_name, &xml)
+        Ok(parse_subscription_feed_with_counts(topic_name, entries))
     }
 
     pub async fn get_subscription(
@@ -400,10 +472,10 @@ impl ManagementClient {
         topic_name: &str,
         sub_name: &str,
     ) -> Result<Vec<SubscriptionRule>> {
-        let xml = self
-            .get_atom(&format!("{}/Subscriptions/{}/Rules", topic_name, sub_name))
+        let entries = self
+            .get_atom_feed(&format!("{}/Subscriptions/{}/Rules", topic_name, sub_name))
             .await?;
-        parse_subscription_rule_feed(&xml)
+        Ok(parse_subscription_rule_feed(entries))
     }
 
     pub async fn upsert_subscription_sql_rule(
@@ -487,13 +559,11 @@ fn extract_element_value(xml: &str, tag: &str) -> Option<String> {
     if let Some(start_pos) = xml.find(&open) {
         let content_start = start_pos + open.len();
         if let Some(end_pos) = xml[content_start..].find(&close) {
-            let val = xml[content_start..content_start + end_pos]
-                .trim()
-                .to_string();
+            let val = xml[content_start..content_start + end_pos].trim();
             if val.is_empty() {
                 return None;
             }
-            return Some(val);
+            return Some(unesc(val));
         }
     }
     None
@@ -504,7 +574,7 @@ fn extract_title(entry_xml: &str) -> String {
     // extract_element (handles attributes) rather than extract_element_value
     // (which requires an exact <title> open tag with no attributes).
     extract_element(entry_xml, "title")
-        .map(|s| s.trim().to_string())
+        .map(|s| unesc(s.trim()))
         .unwrap_or_default()
 }
 
@@ -594,15 +664,15 @@ fn parse_queue_from_entry(entry_xml: &str) -> QueueDescription {
     }
 }
 
-fn parse_queue_feed_with_counts(xml: &str) -> Result<Vec<(QueueDescription, i64, i64)>> {
-    Ok(extract_entries(xml)
+fn parse_queue_feed_with_counts(entries: Vec<String>) -> Vec<(QueueDescription, i64, i64)> {
+    entries
         .into_iter()
         .map(|e| {
             let desc = parse_queue_from_entry(&e);
             let (active, dlq, _, _, _) = parse_count_details(&e);
             (desc, active, dlq)
         })
-        .collect())
+        .collect()
 }
 
 fn parse_single_queue(xml: &str) -> Result<QueueDescription> {
@@ -646,11 +716,11 @@ fn parse_topic_from_entry(entry_xml: &str) -> TopicDescription {
     }
 }
 
-fn parse_topic_feed(xml: &str) -> Result<Vec<TopicDescription>> {
-    Ok(extract_entries(xml)
+fn parse_topic_feed(entries: Vec<String>) -> Vec<TopicDescription> {
+    entries
         .into_iter()
         .map(|e| parse_topic_from_entry(&e))
-        .collect())
+        .collect()
 }
 
 fn parse_single_topic(xml: &str) -> Result<TopicDescription> {
@@ -701,25 +771,25 @@ fn parse_subscription_from_entry(topic_name: &str, entry_xml: &str) -> Subscript
     }
 }
 
-fn parse_subscription_feed(topic_name: &str, xml: &str) -> Result<Vec<SubscriptionDescription>> {
-    Ok(extract_entries(xml)
+fn parse_subscription_feed(topic_name: &str, entries: Vec<String>) -> Vec<SubscriptionDescription> {
+    entries
         .into_iter()
         .map(|e| parse_subscription_from_entry(topic_name, &e))
-        .collect())
+        .collect()
 }
 
 fn parse_subscription_feed_with_counts(
     topic_name: &str,
-    xml: &str,
-) -> Result<Vec<(SubscriptionDescription, i64, i64)>> {
-    Ok(extract_entries(xml)
+    entries: Vec<String>,
+) -> Vec<(SubscriptionDescription, i64, i64)> {
+    entries
         .into_iter()
         .map(|e| {
             let desc = parse_subscription_from_entry(topic_name, &e);
             let (active, dlq, _, _, _) = parse_count_details(&e);
             (desc, active, dlq)
         })
-        .collect())
+        .collect()
 }
 
 fn parse_single_subscription(
@@ -756,19 +826,143 @@ fn parse_subscription_runtime_info(
 
 fn parse_subscription_rule_from_entry(entry_xml: &str) -> SubscriptionRule {
     let name = extract_title(entry_xml);
-    let sql_expression = extract_value_any_ns(entry_xml, "SqlExpression")
-        .or_else(|| extract_value_any_ns(entry_xml, "Expression"))
-        .unwrap_or_else(|| "1=1".to_string());
+    let filter_kind = parse_rule_filter_kind(entry_xml);
+    let sql_expression = match filter_kind {
+        RuleFilterKind::Sql => extract_value_any_ns(entry_xml, "SqlExpression")
+            .or_else(|| extract_value_any_ns(entry_xml, "Expression"))
+            .unwrap_or_default(),
+        RuleFilterKind::True => "1=1".to_string(),
+        RuleFilterKind::False => "1=0".to_string(),
+        RuleFilterKind::Correlation | RuleFilterKind::Unknown => String::new(),
+    };
 
     SubscriptionRule {
         name,
         sql_expression,
+        filter_kind,
     }
 }
 
-fn parse_subscription_rule_feed(xml: &str) -> Result<Vec<SubscriptionRule>> {
-    Ok(extract_entries(xml)
+/// Read the filter's `i:type` attribute. `TrueFilter`/`FalseFilter` derive
+/// from `SqlFilter` and are checked first.
+fn parse_rule_filter_kind(entry_xml: &str) -> RuleFilterKind {
+    let filter_open = entry_xml
+        .find("<Filter")
+        .and_then(|start| {
+            entry_xml[start..]
+                .find('>')
+                .map(|end| &entry_xml[start..start + end])
+        })
+        .unwrap_or("");
+    if filter_open.contains("\"TrueFilter\"") {
+        RuleFilterKind::True
+    } else if filter_open.contains("\"FalseFilter\"") {
+        RuleFilterKind::False
+    } else if filter_open.contains("\"CorrelationFilter\"") {
+        RuleFilterKind::Correlation
+    } else if filter_open.contains("\"SqlFilter\"") {
+        RuleFilterKind::Sql
+    } else {
+        RuleFilterKind::Unknown
+    }
+}
+
+fn parse_subscription_rule_feed(entries: Vec<String>) -> Vec<SubscriptionRule> {
+    entries
         .into_iter()
         .map(|e| parse_subscription_rule_from_entry(&e))
-        .collect())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const QUEUE_ENTRY_PREFIXED: &str = r#"<entry xmlns="http://www.w3.org/2005/Atom"><title type="text">orders&amp;returns</title><content type="application/xml"><QueueDescription xmlns="http://schemas.microsoft.com/netservices/2010/10/servicebus/connect"><LockDuration>PT1M</LockDuration><MaxDeliveryCount>7</MaxDeliveryCount><ForwardTo>a&amp;b</ForwardTo><CountDetails xmlns:d2p1="http://schemas.microsoft.com/netservices/2011/06/servicebus"><d2p1:ActiveMessageCount>12</d2p1:ActiveMessageCount><d2p1:DeadLetterMessageCount>3</d2p1:DeadLetterMessageCount><d2p1:ScheduledMessageCount>1</d2p1:ScheduledMessageCount></CountDetails></QueueDescription></content></entry>"#;
+
+    const QUEUE_ENTRY_UNPREFIXED: &str = r#"<entry><title type="text">q2</title><content><QueueDescription><CountDetails><ActiveMessageCount>5</ActiveMessageCount><DeadLetterMessageCount>0</DeadLetterMessageCount></CountDetails></QueueDescription></content></entry>"#;
+
+    fn rule_entry(filter: &str) -> String {
+        format!(
+            r#"<entry><title type="text">$Default</title><content><RuleDescription>{}</RuleDescription></content></entry>"#,
+            filter
+        )
+    }
+
+    #[test]
+    fn count_details_parse_with_and_without_namespace_prefix() {
+        let (active, dlq, scheduled, _, _) = parse_count_details(QUEUE_ENTRY_PREFIXED);
+        assert_eq!((active, dlq, scheduled), (12, 3, 1));
+        let (active, dlq, _, _, _) = parse_count_details(QUEUE_ENTRY_UNPREFIXED);
+        assert_eq!((active, dlq), (5, 0));
+    }
+
+    #[test]
+    fn entity_text_is_unescaped() {
+        let q = parse_queue_from_entry(QUEUE_ENTRY_PREFIXED);
+        assert_eq!(q.name, "orders&returns");
+        assert_eq!(q.forward_to.as_deref(), Some("a&b"));
+        assert_eq!(q.max_delivery_count, Some(7));
+    }
+
+    #[test]
+    fn feed_entries_are_split_per_entity() {
+        let feed = format!(
+            "<feed>{}{}</feed>",
+            QUEUE_ENTRY_PREFIXED, QUEUE_ENTRY_UNPREFIXED
+        );
+        let parsed = parse_queue_feed_with_counts(extract_entries(&feed));
+        let names: Vec<&str> = parsed.iter().map(|(q, _, _)| q.name.as_str()).collect();
+        assert_eq!(names, vec!["orders&returns", "q2"]);
+    }
+
+    #[test]
+    fn sql_filter_with_comparison_operators_round_trips() {
+        let entry = rule_entry(
+            r#"<Filter i:type="SqlFilter"><SqlExpression>Priority &gt; 5 AND Region &lt;&gt; 'EU'</SqlExpression></Filter>"#,
+        );
+        let rule = parse_subscription_rule_from_entry(&entry);
+        assert_eq!(rule.filter_kind, RuleFilterKind::Sql);
+        assert_eq!(rule.sql_expression, "Priority > 5 AND Region <> 'EU'");
+        // Written back inside CDATA, the operators stay literal.
+        assert!(subscription_rule_sql_xml(&rule.sql_expression)
+            .contains("<![CDATA[Priority > 5 AND Region <> 'EU']]>"));
+    }
+
+    #[test]
+    fn correlation_filters_are_not_mistaken_for_sql() {
+        let entry = rule_entry(
+            r#"<Filter i:type="CorrelationFilter"><CorrelationId>abc</CorrelationId></Filter>"#,
+        );
+        let rule = parse_subscription_rule_from_entry(&entry);
+        assert_eq!(rule.filter_kind, RuleFilterKind::Correlation);
+        assert!(!rule.filter_kind.is_sql_editable());
+        assert!(rule.sql_expression.is_empty());
+    }
+
+    #[test]
+    fn true_filter_is_editable_as_one_equals_one() {
+        let entry = rule_entry(
+            r#"<Filter i:type="TrueFilter"><SqlExpression>1=1</SqlExpression></Filter>"#,
+        );
+        let rule = parse_subscription_rule_from_entry(&entry);
+        assert_eq!(rule.filter_kind, RuleFilterKind::True);
+        assert_eq!(rule.sql_expression, "1=1");
+    }
+
+    #[test]
+    fn entity_xml_escapes_user_values() {
+        let desc = QueueDescription {
+            name: "q".into(),
+            forward_to: Some("a<b>&c".into()),
+            ..Default::default()
+        };
+        let xml = queue_description_xml(&desc);
+        assert!(xml.contains("<ForwardTo>a&lt;b&gt;&amp;c</ForwardTo>"));
+    }
+
+    #[test]
+    fn cdata_terminator_in_sql_is_split() {
+        assert!(!to_cdata_safe("x ]]> y").contains("x ]]> y"));
+    }
 }

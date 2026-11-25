@@ -141,11 +141,9 @@ impl ConnectionConfig {
                 match k.trim() {
                     "Endpoint" => endpoint = Some(v.trim().to_string()),
                     "SharedAccessKeyName" => key_name = Some(v.trim().to_string()),
-                    // Key value may contain '=' (base64 padding)
-                    "SharedAccessKey" => {
-                        let idx = part.find('=').unwrap();
-                        key = Some(part[idx + 1..].trim().to_string());
-                    }
+                    // split_once splits at the first '=', so base64 padding
+                    // in the key stays in `v`.
+                    "SharedAccessKey" => key = Some(v.trim().to_string()),
                     "UseDevelopmentEmulator" => {
                         is_emulator = v.trim().eq_ignore_ascii_case("true");
                     }

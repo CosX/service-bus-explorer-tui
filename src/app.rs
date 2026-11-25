@@ -18,10 +18,14 @@ pub enum BgEvent {
     ResendComplete {
         resent: u32,
         errors: u32,
+        /// Problems worth surfacing (skipped paths, duplicates, ...).
+        warnings: Vec<String>,
     },
     BulkDeleteComplete {
-        deleted: u32,
+        /// Sequence numbers removed, so the list can drop exactly those.
+        removed: Vec<i64>,
         was_dlq: bool,
+        warnings: Vec<String>,
     },
     SingleDeleteComplete {
         sequence_number: i64,
@@ -51,6 +55,9 @@ pub enum BgEvent {
     PeekComplete {
         messages: Vec<ReceivedMessage>,
         is_dlq: bool,
+        /// Partial failures and side effects (e.g. a message the peek
+        /// dead-lettered) that the user must be told about.
+        warnings: Vec<String>,
     },
     SendComplete {
         status: String,
@@ -90,8 +97,63 @@ pub enum BgEvent {
     /// Azure Monitor metrics loaded for an entity.
     MetricsLoaded(EntityMetrics),
     /// Azure Monitor metrics query failed (non-fatal).
-    #[allow(dead_code)]
-    MetricsFailed(String),
+    MetricsFailed {
+        entity_name: String,
+        error: String,
+        /// Permission/not-found errors: retrying soon will not help.
+        permanent: bool,
+    },
+}
+
+/// An operation requested by input handling and executed by the main loop.
+///
+/// Replaces matching on status-bar text: the status line is free to say
+/// anything, and a request is consumed exactly once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Command {
+    Refresh,
+    DiscoverNamespaces,
+    Peek {
+        count: usize,
+        dlq: bool,
+    },
+    Clear(PendingClear),
+    PurgeAllDlq,
+    DeleteEntity(String),
+    /// Submit the open form; the active modal (or inline edit) says which one.
+    SubmitForm,
+    LoadSubscriptionFilter,
+    LoadDestinationEntities,
+    /// Resend the peeked DLQ messages (confirmed in `ConfirmBulkResend`).
+    BulkResend,
+    /// Delete the peeked messages (confirmed in `ConfirmBulkDelete`).
+    BulkDelete,
+    /// Delete one message (confirmed in `ConfirmSingleDelete`).
+    DeleteMessage,
+}
+
+/// A metrics fetch that failed, remembered so it is not retried every tick.
+#[derive(Debug, Clone)]
+pub struct MetricsFailure {
+    pub entity_name: String,
+    pub at: Instant,
+    pub permanent: bool,
+}
+
+impl MetricsFailure {
+    /// Retry delay: long for permission errors, short for transient ones.
+    pub fn retry_after(&self) -> std::time::Duration {
+        if self.permanent {
+            std::time::Duration::from_secs(300)
+        } else {
+            std::time::Duration::from_secs(30)
+        }
+    }
+
+    /// Whether `entity_name` should still be left alone.
+    pub fn blocks(&self, entity_name: &str) -> bool {
+        self.entity_name == entity_name && self.at.elapsed() < self.retry_after()
+    }
 }
 
 /// Which panel is currently focused.
@@ -143,8 +205,8 @@ pub enum ClearAction {
 }
 
 impl ClearAction {
-    /// Status sentinel dispatched in `main.rs` for this action.
-    pub fn sentinel(self) -> &'static str {
+    /// Status text shown while the action starts.
+    pub fn status_text(self) -> &'static str {
         match self {
             ClearAction::DeleteActive => "Clearing (delete)...",
             ClearAction::DeleteDlq => "Clearing (delete DLQ)...",
@@ -276,6 +338,9 @@ pub struct App {
     /// If the message being edited came from DLQ, this holds its sequence number
     /// so we can remove it after successful resend.
     pub edit_source_dlq_seq: Option<i64>,
+    /// The message an edit form was populated from; lets an unchanged custom
+    /// property keep its original wire type on resend.
+    pub edit_source_message: Option<ReceivedMessage>,
 
     // UI state
     pub focus: FocusPanel,
@@ -292,7 +357,6 @@ pub struct App {
     pub body_scroll: u16,   // vertical scroll offset for body editor
 
     // Pending peek count from the peek-count input modal
-    pub pending_peek_count: Option<i32>,
     pub peek_dlq: bool,
 
     // Namespace discovery state
@@ -345,8 +409,12 @@ pub struct App {
     pub metrics_enabled: bool,
     pub metrics_window: MetricsWindow,
     pub metrics_pending: bool,
-    /// Clear operation confirmed by the user, consumed by the dispatcher.
-    pub pending_clear: Option<PendingClear>,
+    /// Last failed metrics fetch, for backoff.
+    pub metrics_failure: Option<MetricsFailure>,
+    /// Operation requested by input handling, consumed by the main loop.
+    pub pending_command: Option<Command>,
+    /// Problem loading the config file, shown once at startup.
+    pub config_warning: Option<String>,
 }
 
 /// Whether Azure Monitor metrics can be served for the current connection.
@@ -449,7 +517,9 @@ impl MetricsWindow {
 
 impl App {
     pub fn new() -> Self {
-        let config = AppConfig::load();
+        let loaded = AppConfig::load();
+        let config = loaded.config;
+        let config_warning = loaded.warning;
         let auto_refresh_enabled = config.settings.auto_refresh_secs > 0;
         let (bg_tx, bg_rx) = mpsc::unbounded_channel();
         Self {
@@ -470,6 +540,7 @@ impl App {
             selected_message_detail: None,
             detail_editing: false,
             edit_source_dlq_seq: None,
+            edit_source_message: None,
             focus: FocusPanel::Tree,
             modal: ActiveModal::None,
             status_message: String::from("Press 'c' to connect, '?' for help"),
@@ -480,7 +551,6 @@ impl App {
             input_field_index: 0,
             form_cursor: 0,
             body_scroll: 0,
-            pending_peek_count: None,
             peek_dlq: false,
             discovered_namespaces: Vec::new(),
             discovery_warnings: Vec::new(),
@@ -515,7 +585,9 @@ impl App {
             metrics_enabled: true,
             metrics_window: MetricsWindow::SixHours,
             metrics_pending: false,
-            pending_clear: None,
+            metrics_failure: None,
+            pending_command: None,
+            config_warning,
         }
     }
 
@@ -529,6 +601,78 @@ impl App {
         self.status_is_error = true;
     }
 
+    /// Persist the config, reporting (not swallowing) a failure.
+    pub fn save_config(&mut self) {
+        if let Err(e) = self.config.save() {
+            tracing::warn!("config save failed: {}", e);
+            self.set_error(format!("Could not save config: {}", e));
+        }
+    }
+
+    /// Queue `command` for the main loop and show `status` meanwhile.
+    pub fn request(&mut self, command: Command, status: impl Into<String>) {
+        self.pending_command = Some(command);
+        self.set_status(status);
+    }
+
+    /// Subscription names of `topic`, from the loaded tree.
+    pub fn subscriptions_of_topic(&self, topic: &str) -> Vec<String> {
+        fn walk(node: &TreeNode, topic: &str, out: &mut Vec<String>) {
+            if node.entity_type == EntityType::Subscription {
+                if let Some((t, sub)) =
+                    crate::client::entity_path::split_subscription_path(&node.path)
+                {
+                    if t == topic {
+                        out.push(sub.to_string());
+                    }
+                }
+            }
+            for child in &node.children {
+                walk(child, topic, out);
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(ref tree) = self.tree {
+            walk(tree, topic, &mut out);
+        }
+        out
+    }
+
+    /// Warning for resending a DLQ from `entity_path`, if the resend fans out
+    /// beyond the source.
+    ///
+    /// Service Bus cannot send to a single subscription: a resend goes to the
+    /// parent topic, and every subscription whose filter matches gets a copy.
+    pub fn resend_fan_out_warning(&self, entity_path: &str, is_topic: bool) -> Option<String> {
+        if is_topic {
+            let subs = self.subscriptions_of_topic(entity_path);
+            if subs.len() > 1 {
+                return Some(format!(
+                    "Each message is resent to topic '{}' and delivered to EVERY matching \
+                     subscription ({}), not only the one it was dead-lettered from.",
+                    entity_path,
+                    subs.join(", ")
+                ));
+            }
+            return None;
+        }
+        let (topic, source) = crate::client::entity_path::split_subscription_path(entity_path)?;
+        let others: Vec<String> = self
+            .subscriptions_of_topic(topic)
+            .into_iter()
+            .filter(|s| s != source)
+            .collect();
+        if others.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "Resend goes to topic '{}': other subscriptions whose filter matches \
+                 will ALSO receive it ({}).",
+                topic,
+                others.join(", ")
+            ))
+        }
+    }
     /// Signal the running background task to stop.
     pub fn cancel_bg(&self) {
         self.bg_cancel.store(true, Ordering::Relaxed);
@@ -630,7 +774,7 @@ impl App {
         if self.flat_nodes.is_empty() {
             return None;
         }
-        let node = &self.flat_nodes[self.tree_selected];
+        let node = self.flat_nodes.get(self.tree_selected)?;
         if node.path.is_empty() {
             None
         } else {
@@ -680,6 +824,8 @@ impl App {
 
     /// Initialize the send message form fields.
     pub fn init_send_form(&mut self) {
+        // A fresh send has no source message whose property types to keep.
+        self.edit_source_message = None;
         self.input_fields = vec![
             ("Body".to_string(), String::new()),
             ("Content-Type".to_string(), "application/json".to_string()),
@@ -698,20 +844,39 @@ impl App {
 
     /// Enter inline WYSIWYG edit mode in the message detail view.
     pub fn init_detail_edit(&mut self) {
-        if let Some(ref msg) = self.selected_message_detail {
-            self.edit_source_dlq_seq = if self.message_tab == MessageTab::DeadLetter {
-                msg.broker_properties.sequence_number
-            } else {
-                None
-            };
-            let msg = msg.clone();
-            self.populate_edit_fields(&msg);
-            self.detail_editing = true;
+        let Some(msg) = self.selected_message_detail.clone() else {
+            return;
+        };
+        if let Err(e) = self.populate_edit_fields(&msg) {
+            self.set_error(e);
+            return;
+        }
+        self.edit_source_dlq_seq = if self.message_tab == MessageTab::DeadLetter {
+            msg.broker_properties.sequence_number
+        } else {
+            None
+        };
+        self.detail_editing = true;
+        let warning = self
+            .selected_entity()
+            .and_then(|(path, _)| self.resend_fan_out_warning(path, false));
+        if let Some(warning) = warning {
+            self.set_status(warning);
         }
     }
 
     /// Populate input_fields from a ReceivedMessage (shared by modal and inline edit).
-    pub fn populate_edit_fields(&mut self, msg: &ReceivedMessage) {
+    ///
+    /// Refuses bodies that are not valid UTF-8: editing them as text would
+    /// replace bytes with U+FFFD and corrupt the payload.
+    pub fn populate_edit_fields(&mut self, msg: &ReceivedMessage) -> Result<(), String> {
+        if !msg.body_is_text() {
+            return Err(format!(
+                "Body is binary ({} bytes) and cannot be edited as text without corrupting it; \
+                 use bulk resend (R) to resend it unchanged",
+                msg.raw_body.len()
+            ));
+        }
         let custom_props_str = msg
             .custom_properties
             .iter()
@@ -759,6 +924,8 @@ impl App {
         ];
         self.input_field_index = 0;
         self.form_cursor = self.input_fields[0].1.len();
+        self.edit_source_message = Some(msg.clone());
+        Ok(())
     }
 
     /// Build a ServiceBusMessage from the current send form fields.
@@ -791,8 +958,23 @@ impl App {
             })
             .unwrap_or_default();
 
+        // Keep an unchanged property's original literal (and so its type);
+        // anything typed by the user is sent as a string.
+        let original = self.edit_source_message.as_ref();
+        let custom_props: Vec<(String, String)> = custom_props
+            .into_iter()
+            .map(|(k, v)| {
+                let literal = original
+                    .and_then(|m| m.raw_property(&k))
+                    .filter(|raw| property_display_value(raw) == v)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| property_literal_from_text(&v));
+                (k, literal)
+            })
+            .collect();
+
         ServiceBusMessage {
-            body: get(0).unwrap_or_default(),
+            body: get(0).unwrap_or_default().into_bytes(),
             content_type: get(1),
             message_id: get(2).or_else(|| Some(uuid::Uuid::new_v4().to_string())),
             correlation_id: get(3),
@@ -968,7 +1150,7 @@ impl App {
         self.modal = ActiveModal::NamespaceDiscovery {
             state: DiscoveryState::Loading,
         };
-        self.set_status("Discovering namespaces...");
+        self.request(Command::DiscoverNamespaces, "Discovering namespaces...");
     }
 
     /// Fetch entity list from a destination connection for copy target selection.
@@ -1044,7 +1226,10 @@ fn message_matches(msg: &ReceivedMessage, query: &str) -> bool {
         }
     }
     // Body: search first 500 chars to avoid perf issues on huge payloads
-    let body_search_len = msg.body.len().min(500);
+    let mut body_search_len = msg.body.len().min(500);
+    while !msg.body.is_char_boundary(body_search_len) {
+        body_search_len -= 1;
+    }
     if msg.body[..body_search_len].to_lowercase().contains(query) {
         return true;
     }
@@ -1175,6 +1360,39 @@ mod tests {
     use crate::client::models::{BrokerProperties, ReceivedMessage};
 
     #[test]
+    fn edited_resend_keeps_unchanged_property_types() {
+        let mut app = App::new();
+        let source = ReceivedMessage::new(
+            b"{}".to_vec(),
+            BrokerProperties::default(),
+            vec![
+                ("count".to_string(), "42".to_string()),
+                ("tenant".to_string(), "\"acme\"".to_string()),
+            ],
+        );
+        app.populate_edit_fields(&source).expect("text body");
+        // The user edits `tenant` and leaves `count` alone.
+        if let Some(field) = app.input_fields.get_mut(8) {
+            field.1 = "count=42,tenant=globex".to_string();
+        }
+        let msg = app.build_message_from_form();
+        assert_eq!(
+            msg.custom_properties,
+            vec![
+                ("count".to_string(), "42".to_string()),
+                ("tenant".to_string(), "\"globex\"".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn binary_messages_cannot_be_opened_for_editing() {
+        let mut app = App::new();
+        let source = ReceivedMessage::new(vec![0xff, 0x00], BrokerProperties::default(), vec![]);
+        assert!(app.populate_edit_fields(&source).is_err());
+    }
+
+    #[test]
     fn failed_metrics_resolution_reports_the_real_reason() {
         let state = MetricsAvailability::Failed("Namespace list failed (403): denied".to_string());
         assert!(!state.is_available());
@@ -1293,18 +1511,16 @@ mod tests {
     }
 
     fn make_msg(id: &str, label: &str, body: &str, seq: i64) -> ReceivedMessage {
-        ReceivedMessage {
-            body: body.to_string(),
-            broker_properties: BrokerProperties {
+        ReceivedMessage::new(
+            body.as_bytes().to_vec(),
+            BrokerProperties {
                 message_id: Some(id.to_string()),
                 label: Some(label.to_string()),
                 sequence_number: Some(seq),
                 ..Default::default()
             },
-            custom_properties: Vec::new(),
-            lock_token_uri: None,
-            source_entity: None,
-        }
+            Vec::new(),
+        )
     }
 
     #[test]

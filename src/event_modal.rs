@@ -1,13 +1,18 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{ActiveModal, App, ClearAction, ClearScope, DiscoveryState, PendingClear};
+use crate::app::{
+    ActiveModal, App, ClearAction, ClearScope, Command, DiscoveryState, PendingClear,
+};
 use crate::client::entity_path;
 use crate::client::models::EntityType;
+use crate::ui::sanitize::floor_char_boundary;
 
-/// Record the confirmed clear operation and raise its dispatch sentinel.
+/// Queue the confirmed clear operation for the main loop.
 fn start_clear(app: &mut App, scope: ClearScope, action: ClearAction) {
-    app.pending_clear = Some(PendingClear { scope, action });
-    app.set_status(action.sentinel());
+    app.request(
+        Command::Clear(PendingClear { scope, action }),
+        action.status_text(),
+    );
 }
 
 fn move_selection_up(selected: &mut usize) {
@@ -79,6 +84,7 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                 KeyCode::Char('M') if app.metrics.is_available() => {
                     app.metrics_window = app.metrics_window.next();
                     app.entity_metrics = None;
+                    app.metrics_failure = None;
                     app.set_status(format!("Metrics window: {}", app.metrics_window.label()));
                 }
                 _ => {}
@@ -128,7 +134,7 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                             Ok(_) => {
                                 app.config
                                     .add_azure_ad_connection(ns.name.clone(), ns.fqdn.clone());
-                                let _ = app.config.save();
+                                app.save_config();
                                 app.connection_name = Some(ns.name.clone());
                                 app.modal = ActiveModal::None;
                                 app.set_status("Connected via Azure AD! Loading entities...");
@@ -175,7 +181,7 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                         Ok(_) => {
                             app.config
                                 .add_azure_ad_connection(fqns.clone(), fqns.clone());
-                            let _ = app.config.save();
+                            app.save_config();
                             app.connection_name = Some(fqns);
                             app.modal = ActiveModal::None;
                             app.set_status("Connected via Azure AD! Loading entities...");
@@ -191,9 +197,10 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
             }
             _ => {}
         },
-        ActiveModal::ConfirmDelete(_) => match key.code {
+        ActiveModal::ConfirmDelete(ref path) => match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                app.set_status("Deleting...");
+                let path = path.clone();
+                app.request(Command::DeleteEntity(path), "Deleting...");
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 app.modal = ActiveModal::None;
@@ -202,7 +209,7 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
         },
         ActiveModal::ConfirmBulkResend { .. } => match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                app.set_status("Bulk resending...");
+                app.request(Command::BulkResend, "Resending...");
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 app.modal = ActiveModal::None;
@@ -211,7 +218,7 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
         },
         ActiveModal::ConfirmBulkDelete { .. } => match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                app.set_status("Bulk deleting...");
+                app.request(Command::BulkDelete, "Deleting messages...");
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 app.modal = ActiveModal::None;
@@ -220,7 +227,7 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
         },
         ActiveModal::ConfirmSingleDelete { .. } => match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                app.set_status("Deleting message...");
+                app.request(Command::DeleteMessage, "Deleting message...");
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 app.modal = ActiveModal::None;
@@ -229,11 +236,11 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
         },
         ActiveModal::PeekCountInput => match key.code {
             KeyCode::Enter => {
-                if let Ok(count) = app.input_buffer.trim().parse::<i32>() {
+                if let Ok(count) = app.input_buffer.trim().parse::<usize>() {
                     if count > 0 {
-                        app.pending_peek_count = Some(count);
                         app.modal = ActiveModal::None;
-                        app.set_status("Peeking messages...");
+                        let dlq = std::mem::take(&mut app.peek_dlq);
+                        app.request(Command::Peek { count, dlq }, "Peeking messages...");
                     } else {
                         app.set_error("Count must be a positive number");
                     }
@@ -248,7 +255,7 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
         },
         ActiveModal::ConfirmPurgeAllDlq => match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                app.set_status("Purging all DLQ...");
+                app.request(Command::PurgeAllDlq, "Purging all DLQ...");
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 app.modal = ActiveModal::None;
@@ -333,7 +340,7 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                 if let Some(conn) = app.config.connections.get(app.input_field_index) {
                     let name = conn.name.clone();
                     app.config.remove_connection(&name);
-                    let _ = app.config.save();
+                    app.save_config();
                     if app.input_field_index > 0 {
                         app.input_field_index -= 1;
                     }
@@ -381,7 +388,7 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                                 .map(|c| c.namespace.clone())
                                 .unwrap_or_else(|| "default".to_string());
                             app.config.add_connection(ns.clone(), cs);
-                            let _ = app.config.save();
+                            app.save_config();
                             app.connection_name = Some(ns);
                             app.modal = ActiveModal::None;
                             app.set_status("Connected! Loading entities...");
@@ -450,7 +457,10 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                             app.copy_dest_entities.clear();
                             app.copy_entity_selected = 0;
                             app.copy_entity_list_state.select(Some(0));
-                            app.set_status("Loading destination entities...");
+                            app.request(
+                                Command::LoadDestinationEntities,
+                                "Loading destination entities...",
+                            );
                             app.modal = ActiveModal::CopySelectEntity;
                         }
                         Err(e) => {
@@ -506,8 +516,10 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                     if exists {
                         app.copy_destination_entity = Some(entity_name.to_string());
                         if let Some(msg) = app.copy_source_message.clone() {
-                            app.populate_edit_fields(&msg);
-                            app.modal = ActiveModal::CopyEditMessage;
+                            match app.populate_edit_fields(&msg) {
+                                Ok(()) => app.modal = ActiveModal::CopyEditMessage,
+                                Err(e) => app.set_error(e),
+                            }
                         }
                     } else {
                         app.set_error(format!("Entity '{}' not found in destination", entity_name));
@@ -518,8 +530,10 @@ pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
                 if let Some((entity, _)) = app.copy_dest_entities.get(app.copy_entity_selected) {
                     app.copy_destination_entity = Some(entity.clone());
                     if let Some(msg) = app.copy_source_message.clone() {
-                        app.populate_edit_fields(&msg);
-                        app.modal = ActiveModal::CopyEditMessage;
+                        match app.populate_edit_fields(&msg) {
+                            Ok(()) => app.modal = ActiveModal::CopyEditMessage,
+                            Err(e) => app.set_error(e),
+                        }
                     }
                 }
             }
@@ -613,6 +627,11 @@ fn handle_form_input(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_field_edit(app: &mut App, key: KeyEvent) {
+    // Every edit below slices the field at the cursor; keep it on a char
+    // boundary so multi-byte text (æ, ø, emoji) can never cause a panic.
+    if let Some((_, ref val)) = app.input_fields.get(app.input_field_index) {
+        app.form_cursor = floor_char_boundary(val, app.form_cursor);
+    }
     let is_body = app.input_field_index == 0
         && app
             .input_fields
@@ -652,8 +671,7 @@ fn handle_field_edit(app: &mut App, key: KeyEvent) {
                     let prev_line_end = line_start - 1;
                     let prev_text = &val[..prev_line_end];
                     let prev_line_start = prev_text.rfind('\n').map(|i| i + 1).unwrap_or(0);
-                    let prev_line_len = prev_line_end - prev_line_start;
-                    app.form_cursor = prev_line_start + col.min(prev_line_len);
+                    app.form_cursor = offset_at_col(val, prev_line_start, prev_line_end, col);
                 }
             }
         }
@@ -666,8 +684,7 @@ fn handle_field_edit(app: &mut App, key: KeyEvent) {
                         .find('\n')
                         .map(|i| next_line_start + i)
                         .unwrap_or(val.len());
-                    let next_line_len = next_line_end - next_line_start;
-                    app.form_cursor = next_line_start + col.min(next_line_len);
+                    app.form_cursor = offset_at_col(val, next_line_start, next_line_end, col);
                 }
             }
         }
@@ -702,13 +719,13 @@ fn handle_field_edit(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::F(2) => {
-            app.set_status("Submitting...");
+            app.request(Command::SubmitForm, "Submitting...");
         }
         KeyCode::Enter
             if key.modifiers.contains(KeyModifiers::CONTROL)
                 || key.modifiers.contains(KeyModifiers::ALT) =>
         {
-            app.set_status("Submitting...");
+            app.request(Command::SubmitForm, "Submitting...");
         }
         KeyCode::Left => {
             if app.form_cursor > 0 {
@@ -769,8 +786,49 @@ fn handle_field_edit(app: &mut App, key: KeyEvent) {
     }
 }
 
+/// Byte offset of the cursor's line start, and the cursor's column in chars.
 fn cursor_line_col(text: &str, cursor: usize) -> (usize, usize) {
-    let before = &text[..cursor.min(text.len())];
+    let cursor = floor_char_boundary(text, cursor);
+    let before = &text[..cursor];
     let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
-    (line_start, cursor - line_start)
+    (line_start, text[line_start..cursor].chars().count())
+}
+
+/// Byte offset of char column `col` within the line `text[start..end]`,
+/// clamped to the line end. Always a char boundary.
+fn offset_at_col(text: &str, start: usize, end: usize, col: usize) -> usize {
+    text[start..end]
+        .char_indices()
+        .nth(col)
+        .map(|(i, _)| start + i)
+        .unwrap_or(end)
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::{cursor_line_col, offset_at_col};
+
+    #[test]
+    fn column_is_counted_in_chars_not_bytes() {
+        let text = "æøå\nabc";
+        // Cursor after "ab" on line 2.
+        let (start, col) = cursor_line_col(text, text.len() - 1);
+        assert_eq!(start, "æøå\n".len());
+        assert_eq!(col, 2);
+    }
+
+    #[test]
+    fn moving_up_into_multibyte_text_lands_on_a_char_boundary() {
+        let text = "æøå\nabc";
+        let (_, col) = cursor_line_col(text, text.len() - 1); // col 2
+        let up = offset_at_col(text, 0, "æøå".len(), col);
+        assert!(text.is_char_boundary(up));
+        assert_eq!(&text[..up], "æø");
+    }
+
+    #[test]
+    fn column_past_line_end_clamps_to_the_end() {
+        let text = "ab\nlonger line";
+        assert_eq!(offset_at_col(text, 0, 2, 9), 2);
+    }
 }

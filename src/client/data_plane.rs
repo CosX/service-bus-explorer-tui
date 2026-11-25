@@ -1,12 +1,80 @@
 use reqwest::Client;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::auth::ConnectionConfig;
 use super::entity_path;
 use super::error::{Result, ServiceBusError};
 use super::models::*;
+use super::scan::{self, LockingReceiver, MessageSender, PeekOutcome, ScanLimits, ScanReport};
+
+/// Per-request timeout. Server-side receive waits are 1s, so anything close to
+/// this means a stalled connection, not a slow broker.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Headers that are part of the HTTP exchange, not Service Bus user
+/// properties. Anything else on a received message is a user property.
+const NON_PROPERTY_HEADERS: &[&str] = &[
+    "brokerproperties",
+    "date",
+    "server",
+    "transfer-encoding",
+    "strict-transport-security",
+    "location",
+    "connection",
+    "keep-alive",
+    "vary",
+    "alt-svc",
+    "cache-control",
+    "expires",
+    "pragma",
+    "etag",
+    "last-modified",
+    "age",
+    "via",
+    "set-cookie",
+    "retry-after",
+    "www-authenticate",
+    "trailer",
+    "upgrade",
+    "accept-ranges",
+    "request-context",
+    "timing-allow-origin",
+    "nel",
+    "report-to",
+    "permissions-policy",
+    "referrer-policy",
+    "x-content-type-options",
+    "x-powered-by",
+    "x-frame-options",
+    "x-xss-protection",
+    "x-aspnet-version",
+    "x-cache",
+];
+
+/// Header prefixes that are never user properties.
+const NON_PROPERTY_PREFIXES: &[&str] = &["content-", "x-ms-", "access-control-", "proxy-"];
+
+/// Header names a user property must not use: they would override the
+/// request's authentication, framing or broker metadata.
+const RESERVED_SEND_HEADERS: &[&str] = &[
+    "authorization",
+    "brokerproperties",
+    "content-type",
+    "content-length",
+    "host",
+    "transfer-encoding",
+    "connection",
+];
+
+fn is_user_property_header(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    !NON_PROPERTY_HEADERS.contains(&n.as_str())
+        && !NON_PROPERTY_PREFIXES.iter().any(|p| n.starts_with(p))
+}
 
 /// Client for Azure Service Bus data-plane operations (send, receive, peek).
 #[derive(Clone)]
@@ -17,10 +85,11 @@ pub struct DataPlaneClient {
 
 impl DataPlaneClient {
     pub fn new(config: ConnectionConfig) -> Self {
-        Self {
-            config,
-            http: Client::new(),
-        }
+        let http = Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            .build()
+            .unwrap_or_default();
+        Self { config, http }
     }
 
     /// Normalize entity paths for the data-plane REST API.
@@ -33,6 +102,15 @@ impl DataPlaneClient {
 
     /// Send a message to a queue or topic.
     pub async fn send_message(&self, entity_path: &str, message: &ServiceBusMessage) -> Result<()> {
+        for (name, _) in &message.custom_properties {
+            if RESERVED_SEND_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+                return Err(ServiceBusError::Operation(format!(
+                    "'{}' cannot be used as a custom property name",
+                    name
+                )));
+            }
+        }
+
         let entity_path = Self::normalize_path(entity_path);
         let url = format!(
             "{}/{}/messages?api-version=2017-04",
@@ -50,46 +128,35 @@ impl DataPlaneClient {
 
         // Build BrokerProperties JSON header
         let mut broker_props = serde_json::Map::new();
-        if let Some(ref id) = message.message_id {
-            broker_props.insert("MessageId".into(), Value::String(id.clone()));
-        }
-        if let Some(ref id) = message.correlation_id {
-            broker_props.insert("CorrelationId".into(), Value::String(id.clone()));
-        }
-        if let Some(ref id) = message.session_id {
-            broker_props.insert("SessionId".into(), Value::String(id.clone()));
-        }
-        if let Some(ref v) = message.label {
-            broker_props.insert("Label".into(), Value::String(v.clone()));
-        }
-        if let Some(ref v) = message.to {
-            broker_props.insert("To".into(), Value::String(v.clone()));
-        }
-        if let Some(ref v) = message.reply_to {
-            broker_props.insert("ReplyTo".into(), Value::String(v.clone()));
-        }
-        if let Some(ref v) = message.time_to_live {
-            if let Ok(secs) = v.parse::<f64>() {
-                broker_props.insert("TimeToLive".into(), Value::from(secs));
+        let mut put = |key: &str, value: &Option<String>| {
+            if let Some(v) = value {
+                broker_props.insert(key.into(), Value::String(v.clone()));
             }
-        }
-        if let Some(ref v) = message.scheduled_enqueue_time {
-            broker_props.insert("ScheduledEnqueueTimeUtc".into(), Value::String(v.clone()));
-        }
-        if let Some(ref v) = message.partition_key {
-            broker_props.insert("PartitionKey".into(), Value::String(v.clone()));
+        };
+        put("MessageId", &message.message_id);
+        put("CorrelationId", &message.correlation_id);
+        put("SessionId", &message.session_id);
+        put("Label", &message.label);
+        put("To", &message.to);
+        put("ReplyTo", &message.reply_to);
+        put("ScheduledEnqueueTimeUtc", &message.scheduled_enqueue_time);
+        put("PartitionKey", &message.partition_key);
+        if let Some(ref v) = message.time_to_live {
+            let secs = v.trim().parse::<f64>().map_err(|_| {
+                ServiceBusError::Operation(format!("TTL '{}' is not a number of seconds", v))
+            })?;
+            broker_props.insert("TimeToLive".into(), Value::from(secs));
         }
 
         if !broker_props.is_empty() {
-            req = req.header(
-                "BrokerProperties",
-                serde_json::to_string(&broker_props).unwrap_or_default(),
-            );
+            let json = serde_json::to_string(&broker_props)
+                .map_err(|e| ServiceBusError::Operation(format!("BrokerProperties: {}", e)))?;
+            req = req.header("BrokerProperties", json);
         }
 
-        // Custom properties as individual headers
+        // User properties travel as headers holding their wire-form literal.
         for (k, v) in &message.custom_properties {
-            req = req.header(k.as_str(), format!("\"{}\"", v));
+            req = req.header(k.as_str(), v.as_str());
         }
 
         let resp = req.body(message.body.clone()).send().await?;
@@ -104,43 +171,18 @@ impl DataPlaneClient {
 
     // ────────── Peek ──────────
 
-    /// Peek messages without permanently removing them.
+    /// Peek messages by locking and then releasing them.
     ///
-    /// Uses peek-lock + abandon under the hood because the REST API's
-    /// `PeekOnly=true` has no cursor and always returns the same first message.
-    /// Peek-lock gives us unique messages; we abandon all locks afterward so
-    /// messages remain available. Note: each peek-lock increments `DeliveryCount`.
+    /// See [`scan::peek`]: each peek costs every returned message one delivery
+    /// attempt. Pass the entity's `MaxDeliveryCount` for active entities so the
+    /// peek stops before dead-lettering more than one message.
     pub async fn peek_messages(
         &self,
         entity_path: &str,
-        count: i32,
-    ) -> Result<Vec<ReceivedMessage>> {
-        let mut messages = Vec::new();
-        let mut lock_uris = Vec::new();
-
-        for _ in 0..count {
-            match self.peek_lock(entity_path, 1).await? {
-                Some(msg) => {
-                    if let Some(ref uri) = msg.lock_token_uri {
-                        lock_uris.push(uri.clone());
-                    }
-                    messages.push(msg);
-                }
-                None => break,
-            }
-        }
-
-        // Abandon all locks — messages become available again.
-        for uri in &lock_uris {
-            let _ = self.abandon_message(uri).await;
-        }
-
-        // Clear lock URIs from returned messages (locks are released)
-        for msg in &mut messages {
-            msg.lock_token_uri = None;
-        }
-
-        Ok(messages)
+        count: usize,
+        max_delivery_count: Option<i32>,
+    ) -> Result<PeekOutcome> {
+        scan::peek(self, entity_path, count, max_delivery_count).await
     }
 
     // ────────── Receive ──────────
@@ -259,48 +301,39 @@ impl DataPlaneClient {
         Ok(())
     }
 
-    // ────────── Single-message removal ──────────
+    // ────────── Targeted removal ──────────
 
-    /// Remove a specific message from the DLQ by sequence number.
+    /// Remove specific messages from `path` (an entity or its
+    /// `/$deadletterqueue`) by sequence number.
     ///
-    /// Peek-locks messages one at a time, looking for a matching sequence number.
-    /// Completes the match and abandons any non-matching messages that were locked
-    /// along the way.  Returns `true` if the message was found and removed.
+    /// `max_delivery_count` must be the entity's limit when `path` is an
+    /// active entity, and `None` for a dead-letter queue.
+    pub async fn remove_by_sequence(
+        &self,
+        path: &str,
+        sequence_numbers: &HashSet<i64>,
+        max_delivery_count: Option<i32>,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<ScanReport> {
+        let limits = ScanLimits {
+            max_scan: scan::DEFAULT_MAX_SCAN,
+            max_delivery_count,
+        };
+        scan::scan_for_sequences(self, path, sequence_numbers, limits, cancel, |_| async {
+            Ok(())
+        })
+        .await
+    }
+
+    /// Remove a single message from an entity's DLQ by sequence number.
+    /// Returns `true` if it was found and removed.
     pub async fn remove_from_dlq(&self, entity_path: &str, sequence_number: i64) -> Result<bool> {
         let dlq_path = format!("{}/$deadletterqueue", entity_path);
-        let mut abandoned_uris: Vec<String> = Vec::new();
-        let max_attempts = 50u32;
-
-        for _ in 0..max_attempts {
-            match self.peek_lock(&dlq_path, 1).await? {
-                Some(msg) => {
-                    let lock_uri = match msg.lock_token_uri {
-                        Some(ref uri) => uri.clone(),
-                        None => continue,
-                    };
-
-                    if msg.broker_properties.sequence_number == Some(sequence_number) {
-                        // Found it — complete (delete from DLQ)
-                        self.complete_message(&lock_uri).await?;
-                        // Abandon everything else we locked
-                        for uri in &abandoned_uris {
-                            let _ = self.abandon_message(uri).await;
-                        }
-                        return Ok(true);
-                    } else {
-                        // Not a match — will abandon after we're done
-                        abandoned_uris.push(lock_uri);
-                    }
-                }
-                None => break,
-            }
-        }
-
-        // Didn't find it — abandon all locks
-        for uri in &abandoned_uris {
-            let _ = self.abandon_message(uri).await;
-        }
-        Ok(false)
+        let targets: HashSet<i64> = [sequence_number].into_iter().collect();
+        let report = self
+            .remove_by_sequence(&dlq_path, &targets, None, None)
+            .await?;
+        Ok(report.completed.contains(&sequence_number))
     }
 
     // ────────── Purge ──────────
@@ -310,13 +343,13 @@ impl DataPlaneClient {
     /// Spawns `concurrency` parallel receive-and-delete workers that drain the
     /// entity as fast as the broker allows.  Returns the total number of
     /// messages deleted.  The optional `cancel` flag lets the caller abort
-    /// early; the optional `progress` callback is invoked after every message.
+    /// early; `progress` (if given) always holds the running total.
     pub async fn purge_concurrent(
         &self,
         entity_path: &str,
         concurrency: usize,
         cancel: Option<Arc<AtomicBool>>,
-        progress: Option<tokio::sync::mpsc::UnboundedSender<u64>>,
+        progress: Option<Arc<AtomicU64>>,
     ) -> Result<u64> {
         let count = Arc::new(AtomicU64::new(0));
         let done = Arc::new(AtomicBool::new(false));
@@ -338,16 +371,14 @@ impl DataPlaneClient {
                     if done.load(Ordering::Relaxed) {
                         return;
                     }
-                    if let Some(ref c) = cancel {
-                        if c.load(Ordering::Relaxed) {
-                            return;
-                        }
+                    if cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+                        return;
                     }
                     match dp.receive_and_delete(&path).await {
                         Ok(Some(_)) => {
-                            let n = count.fetch_add(1, Ordering::Relaxed) + 1;
-                            if let Some(ref tx) = progress {
-                                let _ = tx.send(n);
+                            count.fetch_add(1, Ordering::Relaxed);
+                            if let Some(ref p) = progress {
+                                p.fetch_add(1, Ordering::Relaxed);
                             }
                         }
                         Ok(None) => {
@@ -380,6 +411,28 @@ impl DataPlaneClient {
     }
 }
 
+#[async_trait::async_trait]
+impl LockingReceiver for DataPlaneClient {
+    async fn lock_next(&self, path: &str) -> Result<Option<ReceivedMessage>> {
+        self.peek_lock(path, 1).await
+    }
+
+    async fn complete(&self, lock_uri: &str) -> Result<()> {
+        self.complete_message(lock_uri).await
+    }
+
+    async fn release(&self, lock_uri: &str) -> Result<()> {
+        self.abandon_message(lock_uri).await
+    }
+}
+
+#[async_trait::async_trait]
+impl MessageSender for DataPlaneClient {
+    async fn send(&self, path: &str, message: &ServiceBusMessage) -> Result<()> {
+        self.send_message(path, message).await
+    }
+}
+
 // ──────────────────────────── Response parsing ────────────────────────────
 
 async fn parse_received_message(resp: reqwest::Response) -> Result<ReceivedMessage> {
@@ -390,40 +443,52 @@ async fn parse_received_message(resp: reqwest::Response) -> Result<ReceivedMessa
         .unwrap_or("{}")
         .to_string();
 
-    // Collect custom properties from headers (all non-standard headers)
-    let custom_props: Vec<(String, String)> = resp
+    // User properties arrive as headers holding wire-form literals
+    // (`"text"`, `42`, `true`); keep them verbatim so a resend preserves type.
+    let raw_props: Vec<(String, String)> = resp
         .headers()
         .iter()
-        .filter(|(name, _)| {
-            let n = name.as_str().to_lowercase();
-            !n.starts_with("content-")
-                && n != "brokerproperties"
-                && n != "date"
-                && n != "server"
-                && n != "transfer-encoding"
-                && n != "strict-transport-security"
-                && n != "location"
-                && n != "x-ms-request-id"
-                && !n.starts_with("x-ms-")
-        })
+        .filter(|(name, _)| is_user_property_header(name.as_str()))
         .map(|(name, value)| {
             (
                 name.to_string(),
-                value.to_str().unwrap_or("").trim_matches('"').to_string(),
+                String::from_utf8_lossy(value.as_bytes()).into_owned(),
             )
         })
         .collect();
 
-    let body = resp.text().await?;
+    let body = resp.bytes().await?.to_vec();
 
     let broker_properties: BrokerProperties =
         serde_json::from_str(&broker_props_str).unwrap_or_default();
 
-    Ok(ReceivedMessage {
-        body,
-        broker_properties,
-        custom_properties: custom_props,
-        lock_token_uri: None,
-        source_entity: None,
-    })
+    Ok(ReceivedMessage::new(body, broker_properties, raw_props))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_user_property_header;
+
+    #[test]
+    fn transport_headers_are_not_user_properties() {
+        for h in [
+            "Connection",
+            "Vary",
+            "Alt-Svc",
+            "Content-Type",
+            "x-ms-request-id",
+            "X-Content-Type-Options",
+            "BrokerProperties",
+            "Location",
+        ] {
+            assert!(!is_user_property_header(h), "{} must be filtered", h);
+        }
+    }
+
+    #[test]
+    fn application_headers_are_user_properties() {
+        for h in ["tenant", "DeadLetterReason", "orderId", "x-tenant"] {
+            assert!(is_user_property_header(h), "{} must be kept", h);
+        }
+    }
 }
