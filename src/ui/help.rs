@@ -2,14 +2,11 @@ use ratatui::prelude::*;
 use ratatui::widgets::*;
 use ratatui::Frame;
 
-pub fn render_help(frame: &mut Frame) {
-    let area = centered_rect(60, 70, frame.area());
-    frame.render_widget(Clear, area);
+use crate::app::App;
 
-    let block = Block::default()
-        .title(" Keyboard Shortcuts (press any key to close) ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+pub fn render_help(frame: &mut Frame, app: &mut App) {
+    let area = centered_rect(60, 80, frame.area());
+    frame.render_widget(Clear, area);
 
     let help_text = vec![
         Line::from(""),
@@ -22,6 +19,16 @@ pub fn render_help(frame: &mut Frame) {
         Line::from("  Tab/Shift+Tab  Switch panels"),
         Line::from("  Enter          Select/Expand"),
         Line::from("  g/G            First/Last item"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "  Mouse",
+            Style::default().fg(Color::Cyan).bold(),
+        )]),
+        Line::from("  Click          Focus panel / select row / press button"),
+        Line::from("  Double-click   Open message, expand node, pick list item"),
+        Line::from("  Click ▶/▼      Expand/Collapse"),
+        Line::from("  Wheel          Scroll list or message body"),
+        Line::from("  Shift+drag     Select text (Option+drag in some macOS terminals)"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "  Connection",
@@ -96,7 +103,29 @@ pub fn render_help(frame: &mut Frame) {
         Line::from(""),
     ];
 
-    let paragraph = Paragraph::new(help_text).block(block);
+    // Scroll within the box; the renderer is the one that knows what fits.
+    let visible = area.height.saturating_sub(2);
+    let total = help_text.len() as u16;
+    app.help_max_scroll = total.saturating_sub(visible);
+    app.help_scroll = app.help_scroll.min(app.help_max_scroll);
+
+    let title = if app.help_max_scroll > 0 {
+        format!(
+            " Help ({}/{}) — ↑↓/wheel scroll · other key/click closes ",
+            app.help_scroll + visible.min(total),
+            total
+        )
+    } else {
+        " Keyboard & Mouse (press any key or click to close) ".to_string()
+    };
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let paragraph = Paragraph::new(help_text)
+        .block(block)
+        .scroll((app.help_scroll, 0));
     frame.render_widget(paragraph, area);
 }
 

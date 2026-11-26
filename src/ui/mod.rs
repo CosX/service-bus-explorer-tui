@@ -1,3 +1,4 @@
+pub mod buttons;
 pub mod detail;
 pub mod help;
 pub mod layout;

@@ -72,8 +72,25 @@ fn handle_single_line_input(
 
 pub fn handle_modal_input(app: &mut App, key: KeyEvent) {
     match &app.modal {
+        // Navigation keys (and the mouse wheel) scroll; anything else closes.
         ActiveModal::Help => {
-            app.modal = ActiveModal::None;
+            const PAGE: u16 = 10;
+            let max = app.help_max_scroll;
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    app.help_scroll = app.help_scroll.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    app.help_scroll = app.help_scroll.saturating_add(1).min(max);
+                }
+                KeyCode::PageUp => app.help_scroll = app.help_scroll.saturating_sub(PAGE),
+                KeyCode::PageDown => {
+                    app.help_scroll = app.help_scroll.saturating_add(PAGE).min(max);
+                }
+                KeyCode::Home | KeyCode::Char('g') => app.help_scroll = 0,
+                KeyCode::End | KeyCode::Char('G') => app.help_scroll = max,
+                _ => app.modal = ActiveModal::None,
+            }
         }
         ActiveModal::MetricsDetail => {
             match key.code {

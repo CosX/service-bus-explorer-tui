@@ -31,6 +31,7 @@ Azure returns inconsistent ATOM feed schemas. Parsing in `management.rs` uses ra
 ```
 src/
 ├── main.rs              # Entry point, terminal setup + panic hook, event loop
+├── mouse.rs             # Hit map + mouse handling (clicks replayed as keys)
 ├── commands.rs          # Command dispatch → spawned Azure operations
 ├── bg_events.rs         # Applies BgEvent results to App state
 ├── loaders.rs           # Tree refresh, detail pane, metrics (with backoff), ARM resource ID
@@ -51,6 +52,7 @@ src/
     ├── tree.rs          # Entity tree with inline message/DLQ counts
     ├── messages.rs      # Message list + detail view + inline edit rendering
     ├── modals.rs        # Connection, form, confirm, clear-options, peek-count dialogs
+    ├── buttons.rs       # Clickable button rows for dialogs and forms
     ├── detail.rs        # Entity properties/runtime info panel + sparkline previews
     ├── metrics_detail.rs # Full-screen metrics overlay with braille line charts
     ├── status_bar.rs    # Bottom status bar
@@ -88,6 +90,9 @@ Removing or resending specific messages (`x`, `D`, `R`, edit-resend) scans the e
 
 ### DLQ Resend Loop
 `bulk_ops::resend_dlq_loop` always terminates: failed sends keep their lock so the loop moves on, a path is abandoned after `MAX_CONSECUTIVE_SEND_FAILURES`, and an already-seen sequence number ends the path instead of resending it twice.
+
+### Mouse
+Renderers register clickable areas in `app.hits` (`mouse::HitMap`) every frame: panels, tree rows (plus the ▶/▼ expander), message rows and tabs, dialog list rows, form fields, and buttons (`ui/buttons.rs`). `mouse::handle` finds the topmost target under the pointer; while a dialog is open only targets registered after `hits.begin_dialog()` count. Clicks that mean a key (buttons, double-click to open, tabs) are replayed through `event::handle_key`, so mouse and keyboard share one code path. When adding a list, form or button, register it with `app.hits` after rendering it (use the widget state's `offset()` for scrolled lists).
 
 ### Input Routing Priority
 `event.rs:handle_events()` routes keys in this order:

@@ -415,6 +415,14 @@ pub struct App {
     pub pending_command: Option<Command>,
     /// Problem loading the config file, shown once at startup.
     pub config_warning: Option<String>,
+    /// Clickable areas of the last drawn frame.
+    pub hits: crate::mouse::HitMap,
+    /// Help overlay scroll position, and the largest useful one (set by the
+    /// renderer, which knows how many lines fit).
+    pub help_scroll: u16,
+    pub help_max_scroll: u16,
+    /// Last click, for double-click detection.
+    pub clicks: crate::mouse::ClickTracker,
 }
 
 /// Whether Azure Monitor metrics can be served for the current connection.
@@ -588,6 +596,10 @@ impl App {
             metrics_failure: None,
             pending_command: None,
             config_warning,
+            hits: Default::default(),
+            help_scroll: 0,
+            help_max_scroll: 0,
+            clicks: Default::default(),
         }
     }
 

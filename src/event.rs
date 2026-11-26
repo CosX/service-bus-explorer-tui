@@ -13,94 +13,102 @@ const BG_BUSY_MSG: &str = "A background operation is in progress...";
 /// Returns true if the app should continue running.
 pub fn handle_events(app: &mut App) -> anyhow::Result<bool> {
     if event::poll(Duration::from_millis(100))? {
-        if let Event::Key(key) = event::read()? {
-            // On Windows, crossterm emits both Press and Release events.
-            // Only handle Press to avoid processing each keystroke twice.
-            if key.kind != KeyEventKind::Press {
-                return Ok(app.running);
-            }
-
-            // If a background operation is running, Esc cancels it
-            if app.bg_running && key.code == KeyCode::Esc {
-                app.cancel_bg();
-                app.set_status("Cancelling...");
-                return Ok(app.running);
-            }
-
-            // If a modal is open, route to modal handler
-            if app.modal != ActiveModal::None {
-                event_modal::handle_modal_input(app, key);
-                return Ok(app.running);
-            }
-
-            // If inline editing is active, skip global keys — route directly to panel handler
-            if app.detail_editing {
-                handle_message_input(app, key);
-                return Ok(app.running);
-            }
-
-            // Global keys
-            match key.code {
-                KeyCode::Char('q') if key.modifiers.is_empty() => {
-                    app.running = false;
-                    return Ok(false);
+        match event::read()? {
+            Event::Key(key) => {
+                // On Windows, crossterm emits both Press and Release events.
+                // Only handle Press to avoid processing each keystroke twice.
+                if key.kind == KeyEventKind::Press {
+                    return Ok(handle_key(app, key));
                 }
-                KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
-                    app.running = false;
-                    return Ok(false);
-                }
-                KeyCode::Char('?') => {
-                    app.modal = ActiveModal::Help;
-                    return Ok(true);
-                }
-                KeyCode::Char('c') if key.modifiers.is_empty() => {
-                    if app.bg_running {
-                        app.set_status(
-                            "A background operation is in progress. Press Esc to cancel first.",
-                        );
-                    } else if app.management.is_none() {
-                        // Open connection flow
-                        app.input_buffer.clear();
-                        app.input_cursor = 0;
-                        if app.config.connections.is_empty() {
-                            app.modal = ActiveModal::ConnectionModeSelect;
-                        } else {
-                            app.modal = ActiveModal::ConnectionList;
-                        }
-                    } else {
-                        // Already connected — open switch modal
-                        app.modal = ActiveModal::ConnectionSwitch;
-                    }
-                    return Ok(true);
-                }
-                KeyCode::Tab => {
-                    app.focus = match app.focus {
-                        FocusPanel::Tree => FocusPanel::Detail,
-                        FocusPanel::Detail => FocusPanel::Messages,
-                        FocusPanel::Messages => FocusPanel::Tree,
-                    };
-                    return Ok(true);
-                }
-                KeyCode::BackTab => {
-                    app.focus = match app.focus {
-                        FocusPanel::Tree => FocusPanel::Messages,
-                        FocusPanel::Detail => FocusPanel::Tree,
-                        FocusPanel::Messages => FocusPanel::Detail,
-                    };
-                    return Ok(true);
-                }
-                _ => {}
             }
-
-            // Panel-specific keys
-            match app.focus {
-                FocusPanel::Tree => handle_tree_input(app, key),
-                FocusPanel::Detail => handle_detail_input(app, key),
-                FocusPanel::Messages => handle_message_input(app, key),
-            }
+            Event::Mouse(mouse) => crate::mouse::handle(app, mouse),
+            _ => {}
         }
     }
     Ok(app.running)
+}
+
+/// Route one key press. Also used by mouse handling to replay clicks as keys.
+/// Returns true if the app should continue running.
+pub fn handle_key(app: &mut App, key: KeyEvent) -> bool {
+    // If a background operation is running, Esc cancels it
+    if app.bg_running && key.code == KeyCode::Esc {
+        app.cancel_bg();
+        app.set_status("Cancelling...");
+        return app.running;
+    }
+
+    // If a modal is open, route to modal handler
+    if app.modal != ActiveModal::None {
+        event_modal::handle_modal_input(app, key);
+        return app.running;
+    }
+
+    // If inline editing is active, skip global keys — route directly to panel handler
+    if app.detail_editing {
+        handle_message_input(app, key);
+        return app.running;
+    }
+
+    // Global keys
+    match key.code {
+        KeyCode::Char('q') if key.modifiers.is_empty() => {
+            app.running = false;
+            return false;
+        }
+        KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
+            app.running = false;
+            return false;
+        }
+        KeyCode::Char('?') => {
+            app.help_scroll = 0;
+            app.modal = ActiveModal::Help;
+            return true;
+        }
+        KeyCode::Char('c') if key.modifiers.is_empty() => {
+            if app.bg_running {
+                app.set_status("A background operation is in progress. Press Esc to cancel first.");
+            } else if app.management.is_none() {
+                // Open connection flow
+                app.input_buffer.clear();
+                app.input_cursor = 0;
+                if app.config.connections.is_empty() {
+                    app.modal = ActiveModal::ConnectionModeSelect;
+                } else {
+                    app.modal = ActiveModal::ConnectionList;
+                }
+            } else {
+                // Already connected — open switch modal
+                app.modal = ActiveModal::ConnectionSwitch;
+            }
+            return true;
+        }
+        KeyCode::Tab => {
+            app.focus = match app.focus {
+                FocusPanel::Tree => FocusPanel::Detail,
+                FocusPanel::Detail => FocusPanel::Messages,
+                FocusPanel::Messages => FocusPanel::Tree,
+            };
+            return true;
+        }
+        KeyCode::BackTab => {
+            app.focus = match app.focus {
+                FocusPanel::Tree => FocusPanel::Messages,
+                FocusPanel::Detail => FocusPanel::Tree,
+                FocusPanel::Messages => FocusPanel::Detail,
+            };
+            return true;
+        }
+        _ => {}
+    }
+
+    // Panel-specific keys
+    match app.focus {
+        FocusPanel::Tree => handle_tree_input(app, key),
+        FocusPanel::Detail => handle_detail_input(app, key),
+        FocusPanel::Messages => handle_message_input(app, key),
+    }
+    app.running
 }
 
 fn handle_tree_input(app: &mut App, key: KeyEvent) {
@@ -801,6 +809,28 @@ mod tests {
         );
         assert!(app.status_message.contains("Auto-refresh enabled"));
         assert!(app.last_refresh.is_some());
+    }
+
+    #[test]
+    fn help_scrolls_within_bounds_and_other_keys_close_it() {
+        let mut app = new_app_on_tree();
+        handle_key(&mut app, press(KeyCode::Char('?')));
+        assert_eq!(app.modal, ActiveModal::Help);
+        app.help_max_scroll = 3;
+
+        for _ in 0..5 {
+            handle_key(&mut app, press(KeyCode::Down));
+        }
+        assert_eq!(app.help_scroll, 3, "clamped to the last page");
+        handle_key(&mut app, press(KeyCode::Up));
+        assert_eq!(app.help_scroll, 2);
+        assert_eq!(app.modal, ActiveModal::Help, "scrolling keeps it open");
+
+        handle_key(&mut app, press(KeyCode::Char('x')));
+        assert_eq!(app.modal, ActiveModal::None);
+
+        handle_key(&mut app, press(KeyCode::Char('?')));
+        assert_eq!(app.help_scroll, 0, "reopening starts at the top");
     }
 
     #[test]

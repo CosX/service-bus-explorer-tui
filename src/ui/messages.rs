@@ -3,6 +3,10 @@ use ratatui::widgets::*;
 use ratatui::Frame;
 
 use crate::app::{App, FocusPanel, MessageTab};
+use crate::mouse::Target;
+use crossterm::event::KeyCode;
+
+use super::buttons::{render_buttons, Button};
 
 use super::sanitize::{floor_char_boundary, sanitize_for_terminal, value_with_cursor};
 
@@ -38,6 +42,37 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         .title(title)
         .borders(Borders::ALL)
         .border_style(border_style);
+
+    // Tab labels in the title: " [1] Messages | [2] Dead-letter " starting
+    // one column in from the border.
+    let tab_y = area.y;
+    let messages_tab_x = area.x + 2;
+    let dlq_tab_x = messages_tab_x + "[1] Messages | ".len() as u16;
+    for (x, width, tab) in [
+        (
+            messages_tab_x,
+            "[1] Messages".len() as u16,
+            MessageTab::Messages,
+        ),
+        (
+            dlq_tab_x,
+            "[2] Dead-letter".len() as u16,
+            MessageTab::DeadLetter,
+        ),
+    ] {
+        let right = area.x.saturating_add(area.width).saturating_sub(1);
+        if x < right {
+            app.hits.add(
+                Rect {
+                    x,
+                    y: tab_y,
+                    width: width.min(right - x),
+                    height: 1,
+                },
+                Target::MessageTab(tab),
+            );
+        }
+    }
 
     // If we have a selected message detail, show it
     if app.selected_message_detail.is_some() {
@@ -163,6 +198,17 @@ pub fn render_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(block, area);
     frame.render_stateful_widget(table, msg_layout[0], &mut app.message_table_state);
     render_search_bar(frame, app, msg_layout[1], total_count);
+
+    // Data rows start below the header and its one-line margin.
+    let rows_area = msg_layout[0];
+    let offset = app.message_table_state.offset();
+    for row in 2..rows_area.height {
+        let index = offset + (row - 2) as usize;
+        if index >= app.message_filtered_indices.len() {
+            break;
+        }
+        app.hits.add_row(rows_area, row, Target::MessageRow(index));
+    }
 }
 
 /// Render the bottom bar of the messages panel: search input, filter indicator, or default hints.
@@ -205,9 +251,9 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect, total_count: usiz
     } else {
         // Default hint bar
         let hint_text = if app.message_tab == MessageTab::DeadLetter {
-            "/=Filter  R=Resend All  D=Delete All  Enter=View  e=Edit & Resend"
+            "/=Filter  R=Resend Peeked  D=Delete Peeked  Enter/dbl-click=View  e=Edit & Resend"
         } else {
-            "/=Filter  D=Delete All  Enter=View  e=Edit & Resend"
+            "/=Filter  D=Delete Peeked  Enter/dbl-click=View  e=Edit & Resend"
         };
         let hint = Paragraph::new(hint_text).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(hint, area);
@@ -431,6 +477,10 @@ fn render_detail_edit(frame: &mut Frame, app: &mut App, inner: Rect) {
             Paragraph::new(display_val).style(val_style),
             prop_layout[value_row],
         );
+        app.hits
+            .add(prop_layout[label_row], Target::FormField(field_idx));
+        app.hits
+            .add(prop_layout[value_row], Target::FormField(field_idx));
     }
 
     // ── Editable body (field 0) ──
@@ -450,6 +500,7 @@ fn render_detail_edit(frame: &mut Frame, app: &mut App, inner: Rect) {
         .border_style(body_border_style);
     let body_inner = body_block.inner(body_area);
     frame.render_widget(body_block, body_area);
+    app.hits.add(body_area, Target::FormField(0));
 
     if let Some((_, ref body_val)) = app.input_fields.first() {
         let display_body = if body_is_active {
@@ -480,12 +531,20 @@ fn render_detail_edit(frame: &mut Frame, app: &mut App, inner: Rect) {
         }
     }
 
-    // ── Hint bar ──
-    let hint = Paragraph::new(
-        "Tab fields · ↑↓←→ navigate · Enter newline (body) · F2 resend · Esc cancel",
-    )
-    .style(Style::default().fg(Color::DarkGray));
+    // ── Hint bar: key hints on the left, clickable buttons on the right ──
+    let hint = Paragraph::new("Tab/click fields · ↑↓←→ navigate · Enter newline (body)")
+        .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(hint, hint_area);
+    render_buttons(
+        frame,
+        hint_area,
+        &mut app.hits,
+        &[
+            Button::new("Resend F2", KeyCode::F(2), Color::Green),
+            Button::new("Cancel Esc", KeyCode::Esc, Color::Gray),
+        ],
+        Alignment::Right,
+    );
 }
 
 fn pretty_print_body(body: &str, raw: bool) -> String {

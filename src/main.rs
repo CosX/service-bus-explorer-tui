@@ -7,6 +7,7 @@ mod config;
 mod event;
 mod event_modal;
 mod loaders;
+mod mouse;
 mod ui;
 
 use std::io;

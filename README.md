@@ -30,6 +30,7 @@ Built with Rust, [ratatui](https://ratatui.rs), and the Azure Service Bus REST A
 - Create and delete queues, topics, and subscriptions
 - Purge messages — concurrent delete, DLQ clear, or DLQ resend (with progress & cancellation)
 - Bulk resend DLQ → main entity and bulk delete from messages panel
+- Mouse support — click to focus panels, select rows and press dialog buttons; double-click to open messages or expand nodes; wheel to scroll (Shift+drag still selects text)
 - Topic operations automatically fan out across all subscriptions
 - Delete individual messages from the messages panel with confirmation
 - Multiple saved connections with config persistence (SAS and Azure AD)

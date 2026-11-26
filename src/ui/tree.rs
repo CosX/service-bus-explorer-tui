@@ -4,6 +4,7 @@ use ratatui::Frame;
 
 use crate::app::{App, FocusPanel};
 use crate::client::models::EntityType;
+use crate::mouse::Target;
 
 pub fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_focused = app.focus == FocusPanel::Tree;
@@ -104,4 +105,38 @@ pub fn render_tree(frame: &mut Frame, app: &mut App, area: Rect) {
 
     frame.render_widget(block, area);
     frame.render_stateful_widget(list, inner, &mut app.tree_list_state);
+
+    // Each visible row selects its node; the ▶/▼ expander toggles it.
+    let offset = app.tree_list_state.offset();
+    for row in 0..inner.height {
+        let index = offset + row as usize;
+        let Some(node) = app.flat_nodes.get(index) else {
+            break;
+        };
+        app.hits.add_row(
+            inner,
+            row,
+            Target::TreeRow {
+                index,
+                on_toggle: false,
+            },
+        );
+        if node.has_children {
+            let indent = (node.depth as u16).saturating_mul(2);
+            if indent < inner.width {
+                app.hits.add(
+                    Rect {
+                        x: inner.x + indent,
+                        y: inner.y + row,
+                        width: 2.min(inner.width - indent),
+                        height: 1,
+                    },
+                    Target::TreeRow {
+                        index,
+                        on_toggle: true,
+                    },
+                );
+            }
+        }
+    }
 }

@@ -2,7 +2,8 @@ use ratatui::prelude::*;
 use ratatui::widgets::*;
 use ratatui::Frame;
 
-use crate::app::{ActiveModal, App};
+use crate::app::{ActiveModal, App, FocusPanel};
+use crate::mouse::Target;
 
 use super::detail::render_detail;
 use super::help::render_help;
@@ -14,6 +15,7 @@ use super::tree::render_tree;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
+    app.hits.clear();
 
     // Main layout: [status bar] [body] [keyhints]
     let outer = Layout::default()
@@ -60,6 +62,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         ])
         .split(body[1]);
 
+    // Panels are click/scroll targets; rows registered while rendering sit on top.
+    app.hits.add(body[0], Target::Panel(FocusPanel::Tree));
+    app.hits.add(right[0], Target::Panel(FocusPanel::Detail));
+    app.hits.add(right[1], Target::Panel(FocusPanel::Messages));
+
     // Render panels
     render_tree(frame, app, body[0]);
     render_detail(frame, app, right[0]);
@@ -68,12 +75,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
     // Render modal overlay if active
     if app.modal != ActiveModal::None {
+        app.hits.begin_dialog();
         render_modal(frame, app);
     }
 
     // Render help overlay
     if app.modal == ActiveModal::Help {
-        render_help(frame);
+        render_help(frame, app);
     }
 
     // Render metrics detail overlay

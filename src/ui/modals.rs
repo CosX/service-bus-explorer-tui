@@ -2,7 +2,36 @@ use ratatui::prelude::*;
 use ratatui::widgets::*;
 use ratatui::Frame;
 
+use crossterm::event::KeyCode;
+
 use crate::app::{ActiveModal, App, ClearAction, ClearScope};
+use crate::mouse::{HitMap, Target};
+
+use super::buttons::{render_buttons, Button};
+
+/// The last line of `area`, where dialogs put their buttons.
+fn bottom_row(area: Rect) -> Rect {
+    Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(1),
+        width: area.width,
+        height: area.height.min(1),
+    }
+}
+
+/// Yes / No buttons on the bottom line of a confirmation dialog.
+fn render_yes_no(frame: &mut Frame, inner: Rect, hits: &mut HitMap, yes_color: Color) {
+    render_buttons(
+        frame,
+        bottom_row(inner),
+        hits,
+        &[
+            Button::new("Yes  y", KeyCode::Char('y'), yes_color),
+            Button::new("No  n", KeyCode::Char('n'), Color::Gray),
+        ],
+        Alignment::Center,
+    );
+}
 
 use super::sanitize::{floor_char_boundary, sanitize_for_terminal, value_with_cursor};
 
@@ -50,25 +79,20 @@ fn redact_connection_string_for_preview(conn_str: &str) -> String {
 
 pub fn render_modal(frame: &mut Frame, app: &mut App) {
     match &app.modal.clone() {
-        ActiveModal::ConnectionModeSelect => render_connection_mode_select(frame),
+        ActiveModal::ConnectionModeSelect => render_connection_mode_select(frame, &mut app.hits),
         ActiveModal::ConnectionInput => render_connection_input(frame, app),
         ActiveModal::ConnectionList => render_connection_list(frame, app),
         ActiveModal::ConnectionSwitch => render_connection_switch(frame, app),
         ActiveModal::AzureAdNamespaceInput => render_azure_ad_input(frame, app),
-        ActiveModal::SendMessage => render_form(frame, app, "Send Message", "F2 to send"),
-        ActiveModal::EditResend => render_form(frame, app, "Edit & Resend", "F2 to resend"),
-        ActiveModal::CreateQueue => render_form(frame, app, "Create Queue", "F2 to create"),
-        ActiveModal::CreateTopic => render_form(frame, app, "Create Topic", "F2 to create"),
-        ActiveModal::CreateSubscription => {
-            render_form(frame, app, "Create Subscription", "F2 to create")
+        ActiveModal::SendMessage => render_form(frame, app, "Send Message", "Send"),
+        ActiveModal::EditResend => render_form(frame, app, "Edit & Resend", "Resend"),
+        ActiveModal::CreateQueue => render_form(frame, app, "Create Queue", "Create"),
+        ActiveModal::CreateTopic => render_form(frame, app, "Create Topic", "Create"),
+        ActiveModal::CreateSubscription => render_form(frame, app, "Create Subscription", "Create"),
+        ActiveModal::EditSubscriptionFilter => {
+            render_form(frame, app, "Edit Subscription Filter", "Update")
         }
-        ActiveModal::EditSubscriptionFilter => render_form(
-            frame,
-            app,
-            "Edit Subscription Filter",
-            "F2 to update filter",
-        ),
-        ActiveModal::ConfirmDelete(path) => render_confirm_delete(frame, path),
+        ActiveModal::ConfirmDelete(path) => render_confirm_delete(frame, path, &mut app.hits),
         ActiveModal::ConfirmBulkResend {
             entity_path,
             count,
@@ -89,6 +113,7 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
                 ),
                 warning.as_deref(),
                 Color::Yellow,
+                &mut app.hits,
             );
         }
         ActiveModal::ConfirmBulkDelete {
@@ -110,6 +135,7 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
                 ),
                 warning,
                 Color::Red,
+                &mut app.hits,
             );
         }
         ActiveModal::ConfirmSingleDelete {
@@ -127,6 +153,7 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
                 ),
                 None,
                 Color::Red,
+                &mut app.hits,
             );
         }
         ActiveModal::PeekCountInput => render_peek_count_input(frame, app),
@@ -136,13 +163,13 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
                 ClearScope::Topic(topic) => app.resend_fan_out_warning(topic, true),
                 ClearScope::AllQueues | ClearScope::AllTopics => None,
             };
-            render_clear_options(frame, scope, warning.as_deref());
+            render_clear_options(frame, scope, warning.as_deref(), &mut app.hits);
         }
         ActiveModal::ConfirmClearBatch { scope, action } => {
-            render_confirm_clear_batch(frame, scope, *action);
+            render_confirm_clear_batch(frame, scope, *action, &mut app.hits);
         }
         ActiveModal::ConfirmPurgeAllDlq => {
-            render_confirm_purge_all_dlq(frame);
+            render_confirm_purge_all_dlq(frame, &mut app.hits);
         }
         ActiveModal::NamespaceDiscovery { state } => render_namespace_discovery(frame, app, state),
         ActiveModal::CopySelectConnection => render_copy_select_connection(frame, app),
@@ -156,12 +183,8 @@ pub fn render_modal(frame: &mut Frame, app: &mut App) {
                 .copy_dest_connection_name
                 .as_deref()
                 .unwrap_or("connection");
-            render_form(
-                frame,
-                app,
-                &format!("Copy to {} @ {}", dest, conn),
-                "F2 to copy | Esc to cancel",
-            )
+            let title = format!("Copy to {} @ {}", dest, conn);
+            render_form(frame, app, &title, "Copy")
         }
         ActiveModal::Help | ActiveModal::MetricsDetail | ActiveModal::None => {}
     }
@@ -284,7 +307,7 @@ fn render_connection_input(frame: &mut Frame, app: &App) {
     set_single_line_cursor(frame, layout[1], app.input_cursor);
 }
 
-fn render_connection_list(frame: &mut Frame, app: &App) {
+fn render_connection_list(frame: &mut Frame, app: &mut App) {
     let area = centered_rect(60, 50, frame.area());
     let inner = render_popup_block(
         frame,
@@ -319,11 +342,16 @@ fn render_connection_list(frame: &mut Frame, app: &App) {
         })
         .collect();
 
+    let count = items.len();
     let list = List::new(items);
     frame.render_widget(list, inner);
+    for row in 0..count.min(inner.height as usize) {
+        app.hits
+            .add_row(inner, row as u16, Target::DialogListRow(row));
+    }
 }
 
-fn render_connection_mode_select(frame: &mut Frame) {
+fn render_connection_mode_select(frame: &mut Frame, hits: &mut HitMap) {
     let area = centered_rect_abs_height(50, 9, frame.area());
     let inner = render_popup_block(
         frame,
@@ -352,6 +380,9 @@ fn render_connection_mode_select(frame: &mut Frame) {
 
     let paragraph = Paragraph::new(text);
     frame.render_widget(paragraph, inner);
+    hits.add_row(inner, 1, Target::Key(KeyCode::Char('1')));
+    hits.add_row(inner, 3, Target::Key(KeyCode::Char('2')));
+    hits.add_row(inner, 5, Target::Key(KeyCode::Esc));
 }
 
 fn render_azure_ad_input(frame: &mut Frame, app: &App) {
@@ -387,7 +418,7 @@ fn render_azure_ad_input(frame: &mut Frame, app: &App) {
     set_single_line_cursor(frame, layout[1], app.input_cursor);
 }
 
-fn render_connection_switch(frame: &mut Frame, app: &App) {
+fn render_connection_switch(frame: &mut Frame, app: &mut App) {
     let area = centered_rect(50, 40, frame.area());
     let inner = render_popup_block(
         frame,
@@ -423,9 +454,21 @@ fn render_connection_switch(frame: &mut Frame, app: &App) {
     ];
 
     render_centered_lines(frame, inner, text);
+    render_buttons(
+        frame,
+        bottom_row(inner),
+        &mut app.hits,
+        &[
+            Button::new("Disconnect", KeyCode::Char('d'), Color::Yellow),
+            Button::new("Switch", KeyCode::Char('s'), Color::Cyan),
+            Button::new("Cancel", KeyCode::Esc, Color::Gray),
+        ],
+        Alignment::Center,
+    );
 }
 
-fn render_form(frame: &mut Frame, app: &mut App, title: &str, hint: &str) {
+/// `action` labels the submit button (F2).
+fn render_form(frame: &mut Frame, app: &mut App, title: &str, action: &str) {
     let san_ml = |s: &str| sanitize_for_terminal(s, true);
 
     // Check if the first field is a Body field (SendMessage / EditResend forms).
@@ -436,9 +479,9 @@ fn render_form(frame: &mut Frame, app: &mut App, title: &str, hint: &str) {
         .unwrap_or(false);
 
     if has_body {
-        render_form_with_body(frame, app, title, hint, &san_ml);
+        render_form_with_body(frame, app, title, action, &san_ml);
     } else {
-        render_form_flat(frame, app, title, hint);
+        render_form_flat(frame, app, title, action);
     }
 }
 
@@ -447,7 +490,7 @@ fn render_form_with_body(
     frame: &mut Frame,
     app: &mut App,
     title: &str,
-    hint: &str,
+    action: &str,
     san_ml: &dyn Fn(&str) -> String,
 ) {
     // Properties = fields 1..N, each needs 2 rows (label + value).
@@ -498,6 +541,7 @@ fn render_form_with_body(
         .border_style(body_border_style);
     let body_inner = body_block.inner(body_area);
     frame.render_widget(body_block, body_area);
+    app.hits.add(body_area, Target::FormField(0));
 
     if let Some((_, ref body_val)) = app.input_fields.first() {
         let display_body = if body_is_active {
@@ -574,19 +618,36 @@ fn render_form_with_body(
             Paragraph::new(display_val).style(val_style),
             prop_layout[value_row],
         );
+        app.hits
+            .add(prop_layout[label_row], Target::FormField(field_idx));
+        app.hits
+            .add(prop_layout[value_row], Target::FormField(field_idx));
     }
 
-    // ── Hint line ──
-    let hint_widget = Paragraph::new(format!(
-        "Tab fields · ↑↓←→ navigate · Enter newline (body) · {} · Esc cancel",
-        hint
-    ))
-    .style(Style::default().fg(Color::DarkGray));
+    // ── Hint line: key hints left, buttons right ──
+    let hint_widget = Paragraph::new("Tab/click fields · ↑↓←→ navigate · Enter newline (body)")
+        .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(hint_widget, hint_area);
+    render_form_buttons(frame, hint_area, &mut app.hits, action);
+}
+
+/// Submit (F2) and Cancel (Esc) buttons, right-aligned.
+fn render_form_buttons(frame: &mut Frame, area: Rect, hits: &mut HitMap, action: &str) {
+    let submit = format!("{} F2", action);
+    render_buttons(
+        frame,
+        area,
+        hits,
+        &[
+            Button::new(&submit, KeyCode::F(2), Color::Green),
+            Button::new("Cancel Esc", KeyCode::Esc, Color::Gray),
+        ],
+        Alignment::Right,
+    );
 }
 
 /// Flat form layout for Create* modals (no body field).
-fn render_form_flat(frame: &mut Frame, app: &App, title: &str, hint: &str) {
+fn render_form_flat(frame: &mut Frame, app: &mut App, title: &str, action: &str) {
     let field_count = app.input_fields.len();
     // Each field needs 2 rows (label + value), plus hint line, block borders (2), layout margin (2)
     let rows_needed = (field_count as u16) * 2 + 1 + 2 + 2;
@@ -648,17 +709,17 @@ fn render_form_flat(frame: &mut Frame, app: &App, title: &str, hint: &str) {
 
         let value_widget = Paragraph::new(display_val).style(value_style);
         frame.render_widget(value_widget, layout[value_idx]);
+        app.hits.add(layout[label_idx], Target::FormField(idx));
+        app.hits.add(layout[value_idx], Target::FormField(idx));
     }
 
-    // Hint line
+    // Hint line: key hints left, buttons right
     let hint_idx = app.input_fields.len() * 2;
     if hint_idx < layout.len() {
-        let hint_widget = Paragraph::new(format!(
-            "Tab/↑↓ navigate · ←→/Home/End cursor · {} · Esc cancel",
-            hint
-        ))
-        .style(Style::default().fg(Color::DarkGray));
+        let hint_widget = Paragraph::new("Tab/↑↓/click fields · ←→/Home/End cursor")
+            .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(hint_widget, layout[hint_idx]);
+        render_form_buttons(frame, layout[hint_idx], &mut app.hits, action);
     }
 }
 
@@ -670,7 +731,7 @@ fn pretty_print_body(body: &str) -> String {
     }
 }
 
-fn render_confirm_delete(frame: &mut Frame, path: &str) {
+fn render_confirm_delete(frame: &mut Frame, path: &str, hits: &mut HitMap) {
     let area = centered_rect(50, 20, frame.area());
     let inner = render_popup_block(frame, area, " Confirm Delete ".to_string(), Color::Red);
 
@@ -690,6 +751,7 @@ fn render_confirm_delete(frame: &mut Frame, path: &str) {
             )),
         ],
     );
+    render_yes_no(frame, inner, hits, Color::Red);
 }
 
 fn truncate(s: &str, max_len: usize) -> String {
@@ -706,6 +768,7 @@ fn render_confirm_bulk(
     message: &str,
     warning: Option<&str>,
     color: Color,
+    hits: &mut HitMap,
 ) {
     let height = if warning.is_some() { 40 } else { 25 };
     let area = centered_rect(60, height, frame.area());
@@ -732,9 +795,10 @@ fn render_confirm_bulk(
     )));
 
     render_centered_lines(frame, inner, lines);
+    render_yes_no(frame, inner, hits, color);
 }
 
-fn render_peek_count_input(frame: &mut Frame, app: &App) {
+fn render_peek_count_input(frame: &mut Frame, app: &mut App) {
     let area = centered_rect(55, 30, frame.area());
     let inner = render_popup_block(frame, area, " Peek Messages ".to_string(), Color::Cyan);
 
@@ -763,9 +827,16 @@ fn render_peek_count_input(frame: &mut Frame, app: &App) {
         );
     frame.render_widget(input, layout[2]);
 
-    let hint =
-        Paragraph::new("Enter to peek · Esc to cancel").style(Style::default().fg(Color::DarkGray));
-    frame.render_widget(hint, layout[3]);
+    render_buttons(
+        frame,
+        layout[3],
+        &mut app.hits,
+        &[
+            Button::new("Peek  Enter", KeyCode::Enter, Color::Cyan),
+            Button::new("Cancel  Esc", KeyCode::Esc, Color::Gray),
+        ],
+        Alignment::Left,
+    );
 
     // Peeking active messages costs each one a delivery attempt.
     if !app.peek_dlq {
@@ -781,7 +852,12 @@ fn render_peek_count_input(frame: &mut Frame, app: &App) {
     set_single_line_cursor(frame, layout[2], app.input_cursor);
 }
 
-fn render_clear_options(frame: &mut Frame, scope: &ClearScope, resend_warning: Option<&str>) {
+fn render_clear_options(
+    frame: &mut Frame,
+    scope: &ClearScope,
+    resend_warning: Option<&str>,
+    hits: &mut HitMap,
+) {
     let height = if resend_warning.is_some() { 48 } else { 35 };
     let area = centered_rect(58, height, frame.area());
     let title = if scope.is_batch() {
@@ -843,10 +919,27 @@ fn render_clear_options(frame: &mut Frame, scope: &ClearScope, resend_warning: O
     )));
 
     render_centered_lines(frame, inner, lines);
+    render_buttons(
+        frame,
+        bottom_row(inner),
+        hits,
+        &[
+            Button::new("Del active", KeyCode::Char('d'), Color::Red),
+            Button::new("Del DLQ", KeyCode::Char('l'), Color::Red),
+            Button::new("Resend DLQ", KeyCode::Char('r'), Color::Yellow),
+            Button::new("Cancel", KeyCode::Esc, Color::Gray),
+        ],
+        Alignment::Center,
+    );
 }
 
 /// Second confirmation for a namespace-wide clear (Queues / Topics folder).
-fn render_confirm_clear_batch(frame: &mut Frame, scope: &ClearScope, action: ClearAction) {
+fn render_confirm_clear_batch(
+    frame: &mut Frame,
+    scope: &ClearScope,
+    action: ClearAction,
+    hits: &mut HitMap,
+) {
     let area = centered_rect(62, 32, frame.area());
     let (title, accent) = match action {
         ClearAction::DeleteActive | ClearAction::DeleteDlq => (" Clear ALL Entities ", Color::Red),
@@ -893,9 +986,10 @@ fn render_confirm_clear_batch(frame: &mut Frame, scope: &ClearScope, action: Cle
     ];
 
     render_centered_lines(frame, inner, lines);
+    render_yes_no(frame, inner, hits, accent);
 }
 
-fn render_confirm_purge_all_dlq(frame: &mut Frame) {
+fn render_confirm_purge_all_dlq(frame: &mut Frame, hits: &mut HitMap) {
     let area = centered_rect(58, 30, frame.area());
     let inner = render_popup_block(
         frame,
@@ -936,14 +1030,19 @@ fn render_confirm_purge_all_dlq(frame: &mut Frame) {
     ];
 
     render_centered_lines(frame, inner, lines);
+    render_yes_no(frame, inner, hits, Color::Red);
 }
 
-fn render_namespace_discovery(frame: &mut Frame, app: &App, state: &crate::app::DiscoveryState) {
+fn render_namespace_discovery(
+    frame: &mut Frame,
+    app: &mut App,
+    state: &crate::app::DiscoveryState,
+) {
     use crate::app::DiscoveryState;
     match state {
         DiscoveryState::Loading => render_discovery_loading(frame),
         DiscoveryState::List => render_namespace_list(frame, app),
-        DiscoveryState::Error(msg) => render_discovery_error(frame, msg),
+        DiscoveryState::Error(msg) => render_discovery_error(frame, msg, &mut app.hits),
     }
 }
 
@@ -978,7 +1077,21 @@ fn render_discovery_loading(frame: &mut Frame) {
     render_centered_lines(frame, inner, lines);
 }
 
-fn render_discovery_error(frame: &mut Frame, msg: &str) {
+/// "Enter manually" / "Cancel" buttons used by the discovery dialogs.
+fn render_manual_or_cancel(frame: &mut Frame, inner: Rect, hits: &mut HitMap) {
+    render_buttons(
+        frame,
+        bottom_row(inner),
+        hits,
+        &[
+            Button::new("Enter manually  m", KeyCode::Char('m'), Color::Yellow),
+            Button::new("Cancel  Esc", KeyCode::Esc, Color::Gray),
+        ],
+        Alignment::Center,
+    );
+}
+
+fn render_discovery_error(frame: &mut Frame, msg: &str, hits: &mut HitMap) {
     let area = centered_rect(60, 30, frame.area());
     let inner = render_popup_block(
         frame,
@@ -1020,9 +1133,10 @@ fn render_discovery_error(frame: &mut Frame, msg: &str) {
     )));
 
     render_centered_lines(frame, inner, lines);
+    render_manual_or_cancel(frame, inner, hits);
 }
 
-fn render_namespace_list(frame: &mut Frame, app: &App) {
+fn render_namespace_list(frame: &mut Frame, app: &mut App) {
     let area = centered_rect(80, 70, frame.area());
     let inner = render_popup_block(
         frame,
@@ -1061,6 +1175,7 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
             )),
         ];
         render_centered_lines(frame, inner, lines);
+        render_manual_or_cancel(frame, inner, &mut app.hits);
         return;
     }
 
@@ -1113,11 +1228,15 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
     let mut sorted_subs: Vec<_> = by_subscription.keys().collect();
     sorted_subs.sort();
 
+    // Which namespace (if any) each visual row shows; subscription headers
+    // are rows too, so they are not clickable.
+    let mut row_namespace: Vec<Option<usize>> = Vec::new();
     let mut idx = 0;
     for sub_name in sorted_subs {
         let namespaces = &by_subscription[sub_name];
 
         // Subscription header
+        row_namespace.push(None);
         items.push(ListItem::new(Line::from(Span::styled(
             format!("  {}", sub_name),
             Style::default().fg(Color::Blue).bold(),
@@ -1161,12 +1280,22 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
             ]);
 
             items.push(ListItem::new(line));
+            row_namespace.push(Some(idx));
             idx += 1;
         }
     }
 
     let list = List::new(items);
     frame.render_widget(list, layout[1]);
+    for (row, ns) in row_namespace.iter().enumerate() {
+        if row >= layout[1].height as usize {
+            break;
+        }
+        if let Some(ns) = ns {
+            app.hits
+                .add_row(layout[1], row as u16, Target::DialogListRow(*ns));
+        }
+    }
 
     render_shortcut_hints(
         frame,
@@ -1178,6 +1307,17 @@ fn render_namespace_list(frame: &mut Frame, app: &App) {
             ("Esc", " cancel"),
         ],
     );
+}
+
+/// Register the visible rows of a scrolled single-line list.
+fn register_list_rows(hits: &mut HitMap, area: Rect, offset: usize, count: usize) {
+    for row in 0..area.height {
+        let index = offset + row as usize;
+        if index >= count {
+            break;
+        }
+        hits.add_row(area, row, Target::DialogListRow(index));
+    }
 }
 
 fn render_copy_select_connection(frame: &mut Frame, app: &mut App) {
@@ -1230,9 +1370,12 @@ fn render_copy_select_connection(frame: &mut Frame, app: &mut App) {
     let list = List::new(items)
         .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White).bold());
 
+    let count = app.config.connections.len();
     app.copy_connection_list_state
         .select(Some(app.input_field_index));
     frame.render_stateful_widget(list, layout[1], &mut app.copy_connection_list_state);
+    let offset = app.copy_connection_list_state.offset();
+    register_list_rows(&mut app.hits, layout[1], offset, count);
 
     render_shortcut_hints(
         frame,
@@ -1324,9 +1467,12 @@ fn render_copy_select_entity(frame: &mut Frame, app: &mut App) {
             let list = List::new(items)
                 .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White).bold());
 
+            let count = app.copy_dest_entities.len();
             app.copy_entity_list_state
                 .select(Some(app.copy_entity_selected));
             frame.render_stateful_widget(list, layout[1], &mut app.copy_entity_list_state);
+            let offset = app.copy_entity_list_state.offset();
+            register_list_rows(&mut app.hits, layout[1], offset, count);
         }
     }
 
